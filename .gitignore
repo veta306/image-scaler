@@ -1,0 +1,59 @@
+# ==========================================
+# .gitignore для C++ / CMake / Qt / OpenCV проекту
+# ==========================================
+
+# Папки збирання (build) та тимчасові файли компиляції
+build/
+bin/
+lib/
+obj/
+out/
+dist/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.ninja
+*.ninja_deps
+*.ninja_log
+mocs_compilation.cpp
+
+# Результати автогенерації Qt (moc, uic, qrc)
+*_autogen/
+ui_*.h
+moc_*.cpp
+qrc_*.cpp
+
+# Компільовані бінарні файли та бібліотеки
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.o
+*.obj
+*.pdb
+*.ilk
+*.exp
+
+# Конфігурації інтегрованих середовищ розробки (IDE)
+.vscode/
+.idea/
+.vs/
+*.user
+*.suo
+*.useros
+*.sln
+*.vcxproj
+*.filters
+
+# Тимчасові файли ОС
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# Локальні папки автоналаштування та логів
+*.log
+tmp/
+temp/
