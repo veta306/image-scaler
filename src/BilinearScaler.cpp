@@ -11,17 +11,34 @@ void BilinearScaler::ScaleBlock(const cv::Mat& input, cv::Mat& output, const cv:
     int inRows = input.rows;
     int channels = input.channels();
 
-    // Iterate over each pixel in the target block coordinates of the output image
-    for (int y_out = blockRect.y; y_out < blockRect.y + blockRect.height; ++y_out) {
-        // Clamp to prevent out-of-bounds in output image
-        if (y_out >= output.rows) continue;
+    // Determine padding size based on overlap setting
+    int pad = m_enableOverlap ? 1 : 0;
 
-        for (int x_out = blockRect.x; x_out < blockRect.x + blockRect.width; ++x_out) {
-            if (x_out >= output.cols) continue;
+    // Calculate expanded boundaries in global output coordinates
+    int x_start = std::max(0, blockRect.x - pad);
+    int y_start = std::max(0, blockRect.y - pad);
+    int x_end = std::min(output.cols, blockRect.x + blockRect.width + pad);
+    int y_end = std::min(output.rows, blockRect.y + blockRect.height + pad);
+
+    int tempW = x_end - x_start;
+    int tempH = y_end - y_start;
+
+    if (tempW <= 0 || tempH <= 0) {
+        return;
+    }
+
+    // Allocate temporary block matrix
+    cv::Mat tempBlock = cv::Mat::zeros(tempH, tempW, output.type());
+
+    // 1. Perform Bilinear scaling over the expanded/normal block
+    for (int y_local = 0; y_local < tempH; ++y_local) {
+        int y_global = y_start + y_local;
+        for (int x_local = 0; x_local < tempW; ++x_local) {
+            int x_global = x_start + x_local;
 
             // Pixel-center alignment mapping to the original image
-            double x_in = (x_out + 0.5) / scaleX - 0.5;
-            double y_in = (y_out + 0.5) / scaleY - 0.5;
+            double x_in = (x_global + 0.5) / scaleX - 0.5;
+            double y_in = (y_global + 0.5) / scaleY - 0.5;
 
             // Clamp input coordinates to edge to prevent out-of-bounds
             if (x_in < 0) { x_in = 0; }
@@ -50,7 +67,7 @@ void BilinearScaler::ScaleBlock(const cv::Mat& input, cv::Mat& output, const cv:
                 const cv::Vec3b& p01 = input.at<cv::Vec3b>(y1, x0);
                 const cv::Vec3b& p11 = input.at<cv::Vec3b>(y1, x1);
 
-                cv::Vec3b& outPixel = output.at<cv::Vec3b>(y_out, x_out);
+                cv::Vec3b& outPixel = tempBlock.at<cv::Vec3b>(y_local, x_local);
 
                 for (int c = 0; c < 3; ++c) {
                     double val = w00 * p00[c] + w10 * p10[c] + w01 * p01[c] + w11 * p11[c];
@@ -64,8 +81,28 @@ void BilinearScaler::ScaleBlock(const cv::Mat& input, cv::Mat& output, const cv:
                 uchar p11 = input.at<uchar>(y1, x1);
 
                 double val = w00 * p00 + w10 * p10 + w01 * p01 + w11 * p11;
-                output.at<uchar>(y_out, x_out) = static_cast<uchar>(std::max(0.0, std::min(val, 255.0)));
+                tempBlock.at<uchar>(y_local, x_local) = static_cast<uchar>(std::max(0.0, std::min(val, 255.0)));
             }
         }
     }
+
+    // 2. Optional: Apply high-pass sharpening convolution on the scaled block
+    if (m_enableSharpen) {
+        cv::Mat sharpened;
+        // Classic 3x3 edge-sharpening kernel
+        cv::Mat kernel = (cv::Mat_<float>(3, 3) <<
+             0, -1,  0,
+            -1,  5, -1,
+             0, -1,  0
+        );
+        cv::filter2D(tempBlock, sharpened, tempBlock.depth(), kernel);
+        tempBlock = sharpened;
+    }
+
+    // 3. Extract the original non-overlapping region and copy it back to the global output image
+    int localX = blockRect.x - x_start;
+    int localY = blockRect.y - y_start;
+    cv::Rect localRect(localX, localY, blockRect.width, blockRect.height);
+
+    tempBlock(localRect).copyTo(output(blockRect));
 }

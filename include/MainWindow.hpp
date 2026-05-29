@@ -83,6 +83,8 @@ private:
     QSpinBox* spinTargetWidth;
     QSpinBox* spinTargetHeight;
     QCheckBox* chkKeepAspectRatio;
+    QCheckBox* chkEnableSharpen;
+    QCheckBox* chkEnableOverlap;
     QComboBox* comboBlockSize;
     QSlider* sliderThreads;
     QSpinBox* spinThreads;

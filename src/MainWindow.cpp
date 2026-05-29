@@ -147,6 +147,20 @@ void MainWindow::setupUI() {
     blockLayout->addWidget(comboBlockSize);
     sidebarLayout->addWidget(blockGroup);
 
+    // 3.5. Група покращення зображення та фільтрів
+    QGroupBox* filterGroup = new QGroupBox("Покращення та Фільтри", sidebar);
+    QVBoxLayout* filterLayout = new QVBoxLayout(filterGroup);
+    
+    chkEnableSharpen = new QCheckBox("Фільтр різкості (Unsharp Mask)", filterGroup);
+    chkEnableSharpen->setChecked(false);
+    
+    chkEnableOverlap = new QCheckBox("Компенсація швів (Overlap)", filterGroup);
+    chkEnableOverlap->setChecked(true);
+    
+    filterLayout->addWidget(chkEnableSharpen);
+    filterLayout->addWidget(chkEnableOverlap);
+    sidebarLayout->addWidget(filterGroup);
+
     // 4. Група керування потоками (OpenMP)
     QGroupBox* threadGroup = new QGroupBox("Паралельність (OpenMP)", sidebar);
     QFormLayout* threadForm = new QFormLayout(threadGroup);
@@ -445,6 +459,10 @@ void MainWindow::onProcessClicked() {
         QMessageBox::warning(this, "Попередження", "Будь ласка, завантажте зображення!");
         return;
     }
+
+    // Configure the scaler enhancements from the UI checkbox states
+    bilinearScaler.setEnableSharpen(chkEnableSharpen->isChecked());
+    bilinearScaler.setEnableOverlap(chkEnableOverlap->isChecked());
 
     double scaleX = 1.0;
     double scaleY = 1.0;
