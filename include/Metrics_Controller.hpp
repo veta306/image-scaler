@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include <opencv2/opencv.hpp>
 
 struct ScalingMetrics {
     double singleThreadedTimeMs = 0.0;
@@ -14,6 +15,8 @@ struct ScalingMetrics {
     int blockSizeY = 64;
     int imageWidth = 0;
     int imageHeight = 0;
+    double psnr = 0.0;
+    double ssim = 1.0;
 };
 
 class MetricsController {
@@ -26,6 +29,8 @@ public:
     void ClearLogs();
 
     static ScalingMetrics CalculateMetrics(double singleTimeMs, double multiTimeMs, int threads);
+    static double CalculatePSNR(const cv::Mat& img1, const cv::Mat& img2);
+    static double CalculateSSIM(const cv::Mat& img1, const cv::Mat& img2);
 };
 
 #endif // METRICS_CONTROLLER_HPP
