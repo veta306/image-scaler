@@ -16,6 +16,7 @@
 #include <opencv2/opencv.hpp>
 
 #include <QCheckBox>
+#include <QTableWidget>
 
 #include "Metrics_Controller.hpp"
 #include "BilinearScaler.hpp"
@@ -38,6 +39,7 @@ private slots:
     void onScalingModeChanged(int index);
     void onTargetWidthChanged(int value);
     void onTargetHeightChanged(int value);
+    void onRunBenchmarkClicked();
 
 private:
     void setupUI();
@@ -85,6 +87,7 @@ private:
     QCheckBox* chkKeepAspectRatio;
     QCheckBox* chkEnableSharpen;
     QCheckBox* chkEnableOverlap;
+    QCheckBox* chkEnableDemo;
     QComboBox* comboBlockSize;
     QSlider* sliderThreads;
     QSpinBox* spinThreads;
@@ -106,6 +109,11 @@ private:
     // Performance Bars
     QProgressBar* barSingleTime;
     QProgressBar* barMultiTime;
+
+    // Benchmark tab widgets
+    QPushButton* btnRunBenchmark;
+    QTableWidget* tableBenchmark;
+    QTableWidget* tablePivotBenchmark;
 };
 
 #endif // MAINWINDOW_HPP

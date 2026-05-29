@@ -12,9 +12,12 @@
 #include <QGuiApplication>
 #include <omp.h>
 #include <chrono>
+#include <thread>
 #include <qnamespace.h>
 #include <sstream>
 #include <iomanip>
+#include <QPainter>
+#include <QHeaderView>
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Паралельний масштабувальник зображень - Курсова робота");
@@ -157,8 +160,12 @@ void MainWindow::setupUI() {
     chkEnableOverlap = new QCheckBox("Компенсація швів (Overlap)", filterGroup);
     chkEnableOverlap->setChecked(true);
     
+    chkEnableDemo = new QCheckBox("Демонстраційний режим (візуалізація)", filterGroup);
+    chkEnableDemo->setChecked(false);
+    
     filterLayout->addWidget(chkEnableSharpen);
     filterLayout->addWidget(chkEnableOverlap);
+    filterLayout->addWidget(chkEnableDemo);
     sidebarLayout->addWidget(filterGroup);
 
     // 4. Група керування потоками (OpenMP)
@@ -313,11 +320,63 @@ void MainWindow::setupUI() {
     rowMulti->addWidget(lblMultiBarLabel);
     rowMulti->addWidget(barMultiTime);
     chartLayout->addLayout(rowMulti);
-    
     perfLayout->addWidget(chartGroup);
     perfLayout->addStretch();
     
     tabWidget->addTab(tabPerformance, "Аналіз швидкодії та Метрики");
+
+    // Tab 3: Порівняльний Бенчмарк
+    QWidget* tabBenchmark = new QWidget(tabWidget);
+    QVBoxLayout* benchLayout = new QVBoxLayout(tabBenchmark);
+    benchLayout->setContentsMargins(15, 15, 15, 15);
+    benchLayout->setSpacing(15);
+    
+    // Header controls
+    QHBoxLayout* benchHeader = new QHBoxLayout();
+    QLabel* lblBenchDesc = new QLabel("Порівняння конфігурацій (блоки, потоки) з еталонним інструментом OpenCV:", tabBenchmark);
+    lblBenchDesc->setStyleSheet("font-weight: bold; font-size: 11px;");
+    
+    btnRunBenchmark = new QPushButton("ЗАПУСТИТИ АВТОМАТИЧНИЙ БЕНЧМАРК", tabBenchmark);
+    btnRunBenchmark->setCursor(Qt::PointingHandCursor);
+    
+    benchHeader->addWidget(lblBenchDesc);
+    benchHeader->addStretch();
+    benchHeader->addWidget(btnRunBenchmark);
+    benchLayout->addLayout(benchHeader);
+    
+    QLabel* lblTable1 = new QLabel("Детальні показники конфігурацій:", tabBenchmark);
+    lblTable1->setStyleSheet("font-weight: bold; font-size: 11px;");
+    benchLayout->addWidget(lblTable1);
+
+    // Table results
+    tableBenchmark = new QTableWidget(tabBenchmark);
+    tableBenchmark->setColumnCount(7);
+    tableBenchmark->setHorizontalHeaderLabels({
+        "Метод масштабування", "Розмір блоку", "Потоки OpenMP", 
+        "Час обробки (мс)", "Швидкодія (FPS)", "Якість PSNR (дБ)", "Подібність SSIM"
+    });
+    tableBenchmark->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    tableBenchmark->setSelectionBehavior(QAbstractItemView::SelectRows);
+    tableBenchmark->setSelectionMode(QAbstractItemView::SingleSelection);
+    tableBenchmark->horizontalHeader()->setStretchLastSection(true);
+    tableBenchmark->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    benchLayout->addWidget(tableBenchmark);
+
+    QLabel* lblTable2 = new QLabel("Матриця швидкодії паралельної обробки (Час виконання, мс):", tabBenchmark);
+    lblTable2->setStyleSheet("font-weight: bold; font-size: 11px; margin-top: 10px;");
+    benchLayout->addWidget(lblTable2);
+
+    // Pivot table results
+    tablePivotBenchmark = new QTableWidget(tabBenchmark);
+    tablePivotBenchmark->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    tablePivotBenchmark->setSelectionBehavior(QAbstractItemView::SelectRows);
+    tablePivotBenchmark->setSelectionMode(QAbstractItemView::SingleSelection);
+    tablePivotBenchmark->horizontalHeader()->setStretchLastSection(true);
+    tablePivotBenchmark->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    tablePivotBenchmark->verticalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    benchLayout->addWidget(tablePivotBenchmark);
+
+    tabWidget->addTab(tabBenchmark, "Порівняльний Бенчмарк");
     
     mainLayout->addWidget(tabWidget);
 
@@ -325,6 +384,7 @@ void MainWindow::setupUI() {
     connect(btnLoad, &QPushButton::clicked, this, &MainWindow::onLoadImageClicked);
     connect(btnProcess, &QPushButton::clicked, this, &MainWindow::onProcessClicked);
     connect(btnSave, &QPushButton::clicked, this, &MainWindow::onSaveImageClicked);
+    connect(btnRunBenchmark, &QPushButton::clicked, this, &MainWindow::onRunBenchmarkClicked);
 }
 
 QFrame* MainWindow::createMetricCard(const QString& title, const QString& unit, QLabel*& valueLabelOut) {
@@ -537,10 +597,56 @@ void MainWindow::onProcessClicked() {
     updateLogsDisplay();
     QCoreApplication::processEvents();
 
-    auto tp_start = std::chrono::high_resolution_clock::now();
-    ParallelEngine::ScaleImage(originalImage, scaledImage, blocks, bilinearScaler, scaleX, scaleY, threads);
-    auto tp_end = std::chrono::high_resolution_clock::now();
-    double tp_duration = std::chrono::duration<double, std::milli>(tp_end - tp_start).count();
+    double tp_duration = 0.0;
+    if (chkEnableDemo->isChecked()) {
+        // Progressive Demonstration Mode: tiled rendering with neon green border
+        scaledImage = cv::Mat::zeros(outHeight, outWidth, originalImage.type());
+        scaledImage = cv::Scalar(40, 40, 40); // Dark gray canvas
+        
+        int sleepMs = std::max(5, static_cast<int>(2000 / blocks.size()));
+        
+        for (size_t i = 0; i < blocks.size(); ++i) {
+            auto t_block_start = std::chrono::high_resolution_clock::now();
+            bilinearScaler.ScaleBlock(originalImage, scaledImage, blocks[i], scaleX, scaleY);
+            auto t_block_end = std::chrono::high_resolution_clock::now();
+            tp_duration += std::chrono::duration<double, std::milli>(t_block_end - t_block_start).count();
+            
+            // Convert to QImage and QPixmap
+            QImage qimg = IO_Manager::MatToQImage(scaledImage);
+            QPixmap pix = QPixmap::fromImage(qimg);
+            
+            // Draw neon border over the just-processed block
+            QPainter painter(&pix);
+            painter.setPen(QPen(QColor("#2ecc71"), 3)); // Glowing green
+            painter.drawRect(blocks[i].x, blocks[i].y, blocks[i].width, blocks[i].height);
+            painter.end();
+            
+            // Apply zoom
+            if (std::abs(displayZoomScaled - 1.0) > 0.001) {
+                int w = static_cast<int>(std::round(pix.width() * displayZoomScaled));
+                int h = static_cast<int>(std::round(pix.height() * displayZoomScaled));
+                if (w > 0 && h > 0) {
+                    pix = pix.scaled(w, h, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                }
+            }
+            
+            lblScaledImage->setPixmap(pix);
+            
+            int pct = static_cast<int>((i + 1) * 100 / blocks.size());
+            lblRightStatus->setText(QString("%1x%2 Обробка... %3%").arg(outWidth).arg(outHeight).arg(pct));
+            
+            QCoreApplication::processEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+        }
+        
+        // Clean final update
+        updateScaledViewer();
+    } else {
+        auto tp_start = std::chrono::high_resolution_clock::now();
+        ParallelEngine::ScaleImage(originalImage, scaledImage, blocks, bilinearScaler, scaleX, scaleY, threads);
+        auto tp_end = std::chrono::high_resolution_clock::now();
+        tp_duration = std::chrono::duration<double, std::milli>(tp_end - tp_start).count();
+    }
 
     std::stringstream sTp;
     sTp << std::fixed << std::setprecision(2) << "Паралельний режим завершено за " << tp_duration << " мс.";
@@ -875,4 +981,204 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
     }
     
     return QMainWindow::eventFilter(obj, event);
+}
+
+void MainWindow::onRunBenchmarkClicked() {
+    if (originalImage.empty()) {
+        QMessageBox::warning(this, "Попередження", "Будь ласка, завантажте вхідне зображення!");
+        return;
+    }
+
+    double scaleX = 1.0;
+    double scaleY = 1.0;
+    int outWidth = 0;
+    int outHeight = 0;
+
+    int mode = comboScalingMode->currentIndex();
+    if (mode == 0) {
+        double scale = spinCustomScale->value();
+        scaleX = scale;
+        scaleY = scale;
+        outWidth = static_cast<int>(std::round(originalImage.cols * scaleX));
+        outHeight = static_cast<int>(std::round(originalImage.rows * scaleY));
+    } else {
+        outWidth = spinTargetWidth->value();
+        outHeight = spinTargetHeight->value();
+        scaleX = static_cast<double>(outWidth) / originalImage.cols;
+        scaleY = static_cast<double>(outHeight) / originalImage.rows;
+    }
+
+    if (outWidth <= 0 || outHeight <= 0 || outWidth > 16384 || outHeight > 16384) {
+        QMessageBox::critical(this, "Помилка масштабування", 
+            "Отримані розміри вихідного зображення виходять за дозволені межі (до 16384 px)!");
+        return;
+    }
+
+    // Set waiting cursor and disable the benchmark button
+    QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+    btnRunBenchmark->setEnabled(false);
+    
+    // Clear all rows from both tables
+    tableBenchmark->setRowCount(0);
+    tablePivotBenchmark->setRowCount(0);
+    tablePivotBenchmark->setColumnCount(0);
+
+    // Save active configurations of scaler to restore them at the end
+    bool origSharpen = bilinearScaler.isSharpenEnabled();
+    bool origOverlap = bilinearScaler.isOverlapEnabled();
+    
+    // Configure bilinearScaler for benchmark from UI checkboxes
+    bilinearScaler.setEnableSharpen(chkEnableSharpen->isChecked());
+    bilinearScaler.setEnableOverlap(chkEnableOverlap->isChecked());
+
+    // 1. Benchmark OpenCV Baseline
+    cv::Mat cvResult;
+    auto cv_start = std::chrono::high_resolution_clock::now();
+    cv::resize(originalImage, cvResult, cv::Size(outWidth, outHeight), 0, 0, cv::INTER_LINEAR);
+    auto cv_end = std::chrono::high_resolution_clock::now();
+    double cvDuration = std::chrono::duration<double, std::milli>(cv_end - cv_start).count();
+    double cvFps = (cvDuration > 0.0) ? (1000.0 / cvDuration) : 0.0;
+
+    int rCv = tableBenchmark->rowCount();
+    tableBenchmark->insertRow(rCv);
+    
+    QTableWidgetItem* itemMethod = new QTableWidgetItem("OpenCV cv::resize (Еталон)");
+    QTableWidgetItem* itemBlock = new QTableWidgetItem("N/A (Суцільний)");
+    QTableWidgetItem* itemThreads = new QTableWidgetItem("Бібліотечні (Макс)");
+    QTableWidgetItem* itemTime = new QTableWidgetItem(QString::number(cvDuration, 'f', 1));
+    QTableWidgetItem* itemFps = new QTableWidgetItem(QString::number(cvFps, 'f', 1));
+    QTableWidgetItem* itemPsnr = new QTableWidgetItem("99.00 (Еталон)");
+    QTableWidgetItem* itemSsim = new QTableWidgetItem("1.0000 (Еталон)");
+
+    tableBenchmark->setItem(rCv, 0, itemMethod);
+    tableBenchmark->setItem(rCv, 1, itemBlock);
+    tableBenchmark->setItem(rCv, 2, itemThreads);
+    tableBenchmark->setItem(rCv, 3, itemTime);
+    tableBenchmark->setItem(rCv, 4, itemFps);
+    tableBenchmark->setItem(rCv, 5, itemPsnr);
+    tableBenchmark->setItem(rCv, 6, itemSsim);
+
+    // Style OpenCV row with light gray background
+    for (int col = 0; col < 7; ++col) {
+        tableBenchmark->item(rCv, col)->setBackground(QColor("#f1f2f6"));
+        tableBenchmark->item(rCv, col)->setForeground(QColor("#2f3542"));
+        tableBenchmark->item(rCv, col)->setTextAlignment(Qt::AlignCenter);
+    }
+    tableBenchmark->item(rCv, 0)->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+
+    // Define standard block sizes to test
+    std::vector<int> testBlockSizes = {16, 64, 256};
+
+    // Dynamically define thread counts to test (tailored to system CPU)
+    std::vector<int> testThreads = {1, 4, 8};
+    int maxCores = omp_get_max_threads();
+    if (std::find(testThreads.begin(), testThreads.end(), maxCores) == testThreads.end()) {
+        testThreads.push_back(maxCores);
+    }
+    std::sort(testThreads.begin(), testThreads.end());
+
+    // Configure Pivot table structure dynamically based on unique tested parameters
+    tablePivotBenchmark->setColumnCount(testBlockSizes.size());
+    tablePivotBenchmark->setRowCount(testThreads.size());
+    
+    QStringList horizHeaders;
+    for (int bs : testBlockSizes) {
+        horizHeaders << QString("%1 x %2 px").arg(bs).arg(bs);
+    }
+    tablePivotBenchmark->setHorizontalHeaderLabels(horizHeaders);
+    
+    QStringList vertHeaders;
+    for (int th : testThreads) {
+        if (th == maxCores) {
+            vertHeaders << QString("%1 потоків (Макс)").arg(th);
+        } else if (th == 1) {
+            vertHeaders << "1 потік";
+        } else {
+            vertHeaders << QString("%1 потоки").arg(th);
+        }
+    }
+    tablePivotBenchmark->setVerticalHeaderLabels(vertHeaders);
+
+    struct BenchResult {
+        int rowIndex;
+        int tIndex;
+        int bIndex;
+        double duration;
+    };
+    std::vector<BenchResult> customResults;
+
+    // 2. Loop through all block size and thread configurations
+    for (size_t b = 0; b < testBlockSizes.size(); ++b) {
+        int blockSize = testBlockSizes[b];
+        // Generate grid coordinates
+        std::vector<cv::Rect> blocks = ParallelEngine::GenerateGrid(outWidth, outHeight, blockSize, blockSize);
+        
+        for (size_t t = 0; t < testThreads.size(); ++t) {
+            int threads = testThreads[t];
+            cv::Mat tempResult = cv::Mat::zeros(outHeight, outWidth, originalImage.type());
+
+            // Run scaling computation
+            auto start = std::chrono::high_resolution_clock::now();
+            ParallelEngine::ScaleImage(originalImage, tempResult, blocks, bilinearScaler, scaleX, scaleY, threads);
+            auto end = std::chrono::high_resolution_clock::now();
+            double duration = std::chrono::duration<double, std::milli>(end - start).count();
+            double fps = (duration > 0.0) ? (1000.0 / duration) : 0.0;
+
+            // Calculate PSNR & SSIM quality metrics
+            double psnr = 0.0;
+            double ssim = 1.0;
+            if (!originalImage.empty() && !tempResult.empty()) {
+                cv::Mat tempResized;
+                cv::resize(tempResult, tempResized, originalImage.size(), 0, 0, cv::INTER_LINEAR);
+                psnr = MetricsController::CalculatePSNR(originalImage, tempResized);
+                ssim = MetricsController::CalculateSSIM(originalImage, tempResized);
+            }
+
+            // Insert into detailed flat table
+            int r = tableBenchmark->rowCount();
+            tableBenchmark->insertRow(r);
+
+            QTableWidgetItem* itemM = new QTableWidgetItem("Наш Bilinear Scaler");
+            QTableWidgetItem* itemB = new QTableWidgetItem(QString("%1 x %2").arg(blockSize).arg(blockSize));
+            QTableWidgetItem* itemT = new QTableWidgetItem(QString::number(threads));
+            QTableWidgetItem* itemTi = new QTableWidgetItem(QString::number(duration, 'f', 1));
+            QTableWidgetItem* itemF = new QTableWidgetItem(QString::number(fps, 'f', 1));
+            QTableWidgetItem* itemP = new QTableWidgetItem(QString::number(psnr, 'f', 2));
+            QTableWidgetItem* itemS = new QTableWidgetItem(QString::number(ssim, 'f', 4));
+
+            tableBenchmark->setItem(r, 0, itemM);
+            tableBenchmark->setItem(r, 1, itemB);
+            tableBenchmark->setItem(r, 2, itemT);
+            tableBenchmark->setItem(r, 3, itemTi);
+            tableBenchmark->setItem(r, 4, itemF);
+            tableBenchmark->setItem(r, 5, itemP);
+            tableBenchmark->setItem(r, 6, itemS);
+
+            for (int col = 0; col < 7; ++col) {
+                tableBenchmark->item(r, col)->setTextAlignment(Qt::AlignCenter);
+            }
+            tableBenchmark->item(r, 0)->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+
+            // Insert into Pivot Performance Matrix table
+            QTableWidgetItem* itemPivot = new QTableWidgetItem(QString("%1 мс").arg(duration, 0, 'f', 1));
+            itemPivot->setTextAlignment(Qt::AlignCenter);
+            tablePivotBenchmark->setItem(t, b, itemPivot);
+
+            customResults.push_back({r, static_cast<int>(t), static_cast<int>(b), duration});
+            
+            // Allow GUI update during processing
+            QCoreApplication::processEvents();
+        }
+    }
+
+    // Restore original scaler settings
+    bilinearScaler.setEnableSharpen(origSharpen);
+    bilinearScaler.setEnableOverlap(origOverlap);
+
+    // Restore wait cursor and enable benchmark button
+    QGuiApplication::restoreOverrideCursor();
+    btnRunBenchmark->setEnabled(true);
+
+    QMessageBox::information(this, "Тестування завершено", 
+        "Автоматичний порівняльний бенчмарк успішно виконано!");
 }
