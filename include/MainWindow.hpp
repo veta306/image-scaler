@@ -22,6 +22,7 @@
 #include "BilinearScaler.hpp"
 #include "IO_Manager.hpp"
 #include "Parallel_Engine.hpp"
+#include "ImageViewer.hpp"
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -49,33 +50,16 @@ private:
     QFrame* createMetricCard(const QString& title, const QString& unit, QLabel*& valueLabelOut);
     QFrame* createTimeMetricCard(const QString& title, const QString& unit, QLabel*& valueLabelOut, QLabel*& fpsLabelOut);
     void updateTargetResolutionFromScale();
-    bool eventFilter(QObject* obj, QEvent* event) override;
-    void updateOrigViewer();
-    void updateScaledViewer();
 
-    // Business state
     cv::Mat originalImage;
     cv::Mat scaledImage;
     QString currentFilePath;
     MetricsController metricsController;
     BilinearScaler bilinearScaler;
-    
-    // Zoom & Pan state
-    double displayZoomOrig;
-    double displayZoomScaled;
-    QScrollArea* activePanArea;
-    QPoint panStartPos;
-    int startScrollX;
-    int startScrollY;
-    QScrollArea* scrollOrig;
-    QScrollArea* scrollScaled;
 
-    // UI Elements
-    QLabel* lblOriginalImage;
-    QLabel* lblScaledImage;
+    ImageViewer* viewerOrig;
+    ImageViewer* viewerScaled;
     QLabel* lblImageInfo;
-    QLabel* lblLeftStatus;
-    QLabel* lblRightStatus;
 
     // Input elements
     QComboBox* comboScalingMode;

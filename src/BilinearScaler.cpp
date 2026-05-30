@@ -2,6 +2,9 @@
 #include <algorithm>
 #include <cmath>
 
+/**
+ * @brief Виконує масштабування окремого блоку зображення з підтримкою фільтра різкості та оверлапу.
+ */
 void BilinearScaler::ScaleBlock(const cv::Mat& input, cv::Mat& output, const cv::Rect& blockRect, double scaleX, double scaleY) {
     if (input.empty() || output.empty()) {
         return;
@@ -11,10 +14,8 @@ void BilinearScaler::ScaleBlock(const cv::Mat& input, cv::Mat& output, const cv:
     int inRows = input.rows;
     int channels = input.channels();
 
-    // Determine padding size based on overlap setting
     int pad = m_enableOverlap ? 1 : 0;
 
-    // Calculate expanded boundaries in global output coordinates
     int x_start = std::max(0, blockRect.x - pad);
     int y_start = std::max(0, blockRect.y - pad);
     int x_end = std::min(output.cols, blockRect.x + blockRect.width + pad);
@@ -27,20 +28,16 @@ void BilinearScaler::ScaleBlock(const cv::Mat& input, cv::Mat& output, const cv:
         return;
     }
 
-    // Allocate temporary block matrix
     cv::Mat tempBlock = cv::Mat::zeros(tempH, tempW, output.type());
 
-    // 1. Perform Bilinear scaling over the expanded/normal block
     for (int y_local = 0; y_local < tempH; ++y_local) {
         int y_global = y_start + y_local;
         for (int x_local = 0; x_local < tempW; ++x_local) {
             int x_global = x_start + x_local;
 
-            // Pixel-center alignment mapping to the original image
             double x_in = (x_global + 0.5) / scaleX - 0.5;
             double y_in = (y_global + 0.5) / scaleY - 0.5;
 
-            // Clamp input coordinates to edge to prevent out-of-bounds
             if (x_in < 0) { x_in = 0; }
             if (y_in < 0) { y_in = 0; }
             if (x_in >= inCols - 1) { x_in = inCols - 1; }
@@ -61,7 +58,6 @@ void BilinearScaler::ScaleBlock(const cv::Mat& input, cv::Mat& output, const cv:
             double w11 = dx * dy;
 
             if (channels == 3) {
-                // Get pixels from the 4 nearest neighbors (BGR)
                 const cv::Vec3b& p00 = input.at<cv::Vec3b>(y0, x0);
                 const cv::Vec3b& p10 = input.at<cv::Vec3b>(y0, x1);
                 const cv::Vec3b& p01 = input.at<cv::Vec3b>(y1, x0);
@@ -74,7 +70,6 @@ void BilinearScaler::ScaleBlock(const cv::Mat& input, cv::Mat& output, const cv:
                     outPixel[c] = static_cast<uchar>(std::max(0.0, std::min(val, 255.0)));
                 }
             } else if (channels == 1) {
-                // 1-channel Grayscale
                 uchar p00 = input.at<uchar>(y0, x0);
                 uchar p10 = input.at<uchar>(y0, x1);
                 uchar p01 = input.at<uchar>(y1, x0);
@@ -86,10 +81,8 @@ void BilinearScaler::ScaleBlock(const cv::Mat& input, cv::Mat& output, const cv:
         }
     }
 
-    // 2. Optional: Apply high-pass sharpening convolution on the scaled block
     if (m_enableSharpen) {
         cv::Mat sharpened;
-        // Classic 3x3 edge-sharpening kernel
         cv::Mat kernel = (cv::Mat_<float>(3, 3) <<
              0, -1,  0,
             -1,  5, -1,
@@ -99,7 +92,6 @@ void BilinearScaler::ScaleBlock(const cv::Mat& input, cv::Mat& output, const cv:
         tempBlock = sharpened;
     }
 
-    // 3. Extract the original non-overlapping region and copy it back to the global output image
     int localX = blockRect.x - x_start;
     int localY = blockRect.y - y_start;
     cv::Rect localRect(localX, localY, blockRect.width, blockRect.height);
