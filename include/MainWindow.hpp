@@ -23,6 +23,7 @@
 #include "BicubicScaler.hpp"
 #include "LanczosScaler.hpp"
 #include "AdaptiveScaler.hpp"
+#include "GpuScaler.hpp"
 #include "VideoProcessor.hpp"
 #include "IO_Manager.hpp"
 #include "Parallel_Engine.hpp"
@@ -55,6 +56,7 @@ private slots:
     void onVideoPlayClicked();
     void onVideoPauseClicked();
     void onVideoStopClicked();
+    void onExportVideoClicked();
     void onVideoRecordClicked();
     void onVideoSeekSliderMoved(int position);
     void onVideoFrameProcessed(const QImage& frame, double frameMs, double fps, int currentFrame, int totalFrames);
@@ -84,6 +86,7 @@ private:
     BicubicScaler bicubicScaler;
     LanczosScaler lanczosScaler;
     AdaptiveScaler adaptiveScaler;
+    GpuScaler gpuScaler;
 
     std::vector<BenchmarkRecord> currentBenchmarkRecords;
 
@@ -103,9 +106,11 @@ private:
     QCheckBox* chkEnableOverlap;
     QCheckBox* chkEnableDemo;
     QCheckBox* chkEnableSIMD;
+    QCheckBox* chkEnableGPU;
     QComboBox* comboBlockSize;
     QSlider* sliderThreads;
     QSpinBox* spinThreads;
+    QCheckBox* chkDisableSingleThread;
 
     QPushButton* btnLoad;
     QPushButton* btnProcess;
@@ -146,12 +151,14 @@ private:
     QPushButton* btnVideoPlay;
     QPushButton* btnVideoPause;
     QPushButton* btnVideoStop;
+    QPushButton* btnExportVideo;
     QPushButton* btnVideoRecord;
     QSlider* sliderVideoProgress;
     QCheckBox* chkRealtimeMode;
     QLabel* lblVideoTime;
-    QString outputVideoPath;
-    bool isRecordingVideo = false;
+    QString currentVideoPath;
+    QString outputRecordPath;
+    bool isRecordingVideo{false};
 };
 
 #endif // MAINWINDOW_HPP

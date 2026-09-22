@@ -28,8 +28,8 @@ QImage IO_Manager::MatToQImage(const cv::Mat& mat) {
 
     if (mat.type() == CV_8UC3) {
         const uchar* qImageBuffer = (const uchar*)mat.data;
-        QImage img(qImageBuffer, mat.cols, mat.rows, mat.step, QImage::Format_RGB888);
-        return img.rgbSwapped().copy();
+        QImage img(qImageBuffer, mat.cols, mat.rows, mat.step, QImage::Format_BGR888);
+        return img.copy();
     } else if (mat.type() == CV_8UC4) {
         const uchar* qImageBuffer = (const uchar*)mat.data;
         QImage img(qImageBuffer, mat.cols, mat.rows, mat.step, QImage::Format_ARGB32);

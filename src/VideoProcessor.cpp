@@ -1,8 +1,15 @@
 #include "VideoProcessor.hpp"
 #include "Parallel_Engine.hpp"
 #include "IO_Manager.hpp"
+#include "GpuScaler.hpp"
 #include <chrono>
 #include <cmath>
+#include <QFile>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <timeapi.h>
+#endif
 
 /**
  * @brief Конструктор класу VideoProcessor.
@@ -33,6 +40,7 @@ bool VideoProcessor::openVideo(const QString& filePath) {
     }
 
     m_isCamera = false;
+    m_filePath = filePath;
     m_sourceWidth = static_cast<int>(m_capture.get(cv::CAP_PROP_FRAME_WIDTH));
     m_sourceHeight = static_cast<int>(m_capture.get(cv::CAP_PROP_FRAME_HEIGHT));
     m_sourceFps = m_capture.get(cv::CAP_PROP_FPS);
@@ -62,6 +70,7 @@ bool VideoProcessor::openCamera(int cameraIndex) {
     }
 
     m_isCamera = true;
+    m_filePath.clear();
     m_sourceWidth = static_cast<int>(m_capture.get(cv::CAP_PROP_FRAME_WIDTH));
     m_sourceHeight = static_cast<int>(m_capture.get(cv::CAP_PROP_FRAME_HEIGHT));
     m_sourceFps = 30.0;
@@ -85,6 +94,7 @@ void VideoProcessor::closeVideo() {
     if (m_writer.isOpened()) {
         m_writer.release();
     }
+    m_filePath.clear();
     m_sourceWidth = 0;
     m_sourceHeight = 0;
     m_totalFrames = 0;
@@ -199,6 +209,27 @@ void VideoProcessor::setRealtimeMode(bool enabled) {
 }
 
 /**
+ * @brief Вмикає або вимикає апаратне прискорення масштабування на відеокарті.
+ */
+void VideoProcessor::setUseGpu(bool enabled) {
+    m_useGpu = enabled;
+}
+
+/**
+ * @brief Встановлює числовий індекс активного алгоритму.
+ */
+void VideoProcessor::setAlgorithmIndex(int index) {
+    m_algoIndex = index;
+}
+
+/**
+ * @brief Вмикає або вимикає фільтр підвищення різкості.
+ */
+void VideoProcessor::setEnableSharpen(bool enabled) {
+    m_enableSharpen = enabled;
+}
+
+/**
  * @brief Вмикає або вимикає збереження результату обробки у відеофайл.
  */
 bool VideoProcessor::setSaveOutput(bool enable, const QString& outputPath) {
@@ -223,7 +254,11 @@ void VideoProcessor::run() {
 
     emit statusChanged("Обробка відеопотоку запущена...");
 
-    auto lastFpsCalcTime = std::chrono::high_resolution_clock::now();
+#ifdef _WIN32
+    timeBeginPeriod(1);
+#endif
+
+    auto lastFpsCalcTime = std::chrono::steady_clock::now();
     int framesSinceFpsCalc = 0;
     double currentFps = 0.0;
 
@@ -235,9 +270,17 @@ void VideoProcessor::run() {
     int threads = 4;
     IScaler* scaler = nullptr;
 
+    auto playbackStartTime = std::chrono::steady_clock::now();
+    int playedFramesCount = 0;
+
     while (m_running && !m_stopRequested) {
         if (m_paused) {
-            msleep(25);
+            msleep(20);
+            double frameIntervalSec = (m_sourceFps > 0.0) ? (1.0 / m_sourceFps) : (1.0 / 30.0);
+            playbackStartTime = std::chrono::steady_clock::now() - 
+                std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                    std::chrono::duration<double>(playedFramesCount * frameIntervalSec)
+                );
             continue;
         }
 
@@ -245,9 +288,9 @@ void VideoProcessor::run() {
             int target = m_seekTargetFrame.load();
             m_capture.set(cv::CAP_PROP_POS_FRAMES, target);
             m_seekRequested = false;
+            playedFramesCount = 0;
+            playbackStartTime = std::chrono::steady_clock::now();
         }
-
-        auto frameStartTime = std::chrono::high_resolution_clock::now();
 
         cv::Mat frame;
         if (!m_capture.read(frame) || frame.empty()) {
@@ -277,9 +320,16 @@ void VideoProcessor::run() {
             outH = static_cast<int>(std::round(frame.rows * sY));
         }
 
+        // Кодеки MPEG4/H264 вимагають парних розмірів
+        if (outW % 2 != 0) outW++;
+        if (outH % 2 != 0) outH++;
+
         // Ініціалізація VideoWriter при першому кадрі, якщо увімкнено збереження
         if (m_saveOutput && !m_writer.isOpened() && !m_outputPath.isEmpty()) {
             int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
+            if (m_outputPath.endsWith(".avi", Qt::CaseInsensitive)) {
+                fourcc = cv::VideoWriter::fourcc('M', 'J', 'P', 'G');
+            }
             m_writer.open(m_outputPath.toStdString(), fourcc, m_sourceFps, cv::Size(outW, outH));
             if (!m_writer.isOpened()) {
                 // Спроба альтернативного кодеку
@@ -291,13 +341,16 @@ void VideoProcessor::run() {
         cv::Mat scaledFrame = cv::Mat::zeros(outH, outW, frame.type());
         std::vector<cv::Rect> blocks = ParallelEngine::GenerateGrid(outW, outH, blockSize, blockSize);
 
-        auto scaleStartTime = std::chrono::high_resolution_clock::now();
-        if (scaler != nullptr) {
+        auto scaleStartTime = std::chrono::steady_clock::now();
+        if (m_useGpu && GpuScaler::isAvailable()) {
+            GpuScaler::Algorithm algo = static_cast<GpuScaler::Algorithm>(m_algoIndex.load());
+            GpuScaler::scaleFrame(frame, scaledFrame, outW, outH, algo, m_enableSharpen.load());
+        } else if (scaler != nullptr) {
             ParallelEngine::ScaleImage(frame, scaledFrame, blocks, *scaler, sX, sY, threads);
         } else {
             cv::resize(frame, scaledFrame, cv::Size(outW, outH));
         }
-        auto scaleEndTime = std::chrono::high_resolution_clock::now();
+        auto scaleEndTime = std::chrono::steady_clock::now();
         double scaleDurationMs = std::chrono::duration<double, std::milli>(scaleEndTime - scaleStartTime).count();
 
         if (m_saveOutput && m_writer.isOpened()) {
@@ -306,25 +359,44 @@ void VideoProcessor::run() {
 
         QImage qimg = IO_Manager::MatToQImage(scaledFrame);
 
+        emit frameProcessed(qimg, scaleDurationMs, currentFps, curFrameIdx, m_totalFrames);
+
+        playedFramesCount++;
+
+        // Високоточна синхронізація з частотою джерела
+        if (m_realtimeMode && m_sourceFps > 0.0) {
+            double frameIntervalSec = 1.0 / m_sourceFps;
+            auto targetDeadline = playbackStartTime + 
+                std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                    std::chrono::duration<double>(playedFramesCount * frameIntervalSec)
+                );
+            auto now = std::chrono::steady_clock::now();
+            double waitMs = std::chrono::duration<double, std::milli>(targetDeadline - now).count();
+
+            if (waitMs > 1.5) {
+                msleep(static_cast<unsigned long>(waitMs - 1.0));
+            }
+            while (std::chrono::steady_clock::now() < targetDeadline) {
+                QThread::yieldCurrentThread();
+            }
+
+            // Якщо відставання перевищує 3 кадри (> 100 мс), пересинхронізуємо таймлайн без накопичення
+            if (waitMs < -100.0) {
+                playbackStartTime = std::chrono::steady_clock::now() - 
+                    std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                        std::chrono::duration<double>(playedFramesCount * frameIntervalSec)
+                    );
+            }
+        }
+
+        // Розрахунок фактичного темпу відтворення
         framesSinceFpsCalc++;
-        auto now = std::chrono::high_resolution_clock::now();
-        double elapsedSec = std::chrono::duration<double>(now - lastFpsCalcTime).count();
+        auto nowFps = std::chrono::steady_clock::now();
+        double elapsedSec = std::chrono::duration<double>(nowFps - lastFpsCalcTime).count();
         if (elapsedSec >= 0.4) {
             currentFps = framesSinceFpsCalc / elapsedSec;
             framesSinceFpsCalc = 0;
-            lastFpsCalcTime = now;
-        }
-
-        emit frameProcessed(qimg, scaleDurationMs, currentFps, curFrameIdx, m_totalFrames);
-
-        if (m_realtimeMode && m_sourceFps > 0.0) {
-            double targetFrameTimeMs = 1000.0 / m_sourceFps;
-            auto frameEndTime = std::chrono::high_resolution_clock::now();
-            double totalFrameTimeMs = std::chrono::duration<double, std::milli>(frameEndTime - frameStartTime).count();
-            double sleepTimeMs = targetFrameTimeMs - totalFrameTimeMs;
-            if (sleepTimeMs > 1.0) {
-                msleep(static_cast<unsigned long>(sleepTimeMs));
-            }
+            lastFpsCalcTime = nowFps;
         }
     }
 
@@ -332,7 +404,146 @@ void VideoProcessor::run() {
         m_writer.release();
     }
 
+#ifdef _WIN32
+    timeEndPeriod(1);
+#endif
+
     m_running = false;
     emit playbackFinished();
     emit statusChanged("Відтворення / обробку завершено.");
+}
+
+// ============================================================================
+// Реалізація класу VideoExporter
+// ============================================================================
+
+VideoExporter::VideoExporter(QObject* parent)
+    : QThread(parent) {
+}
+
+VideoExporter::~VideoExporter() {
+    cancel();
+    wait();
+}
+
+void VideoExporter::setParams(const QString& inputPath,
+                             const QString& outputPath,
+                             int outWidth, int outHeight,
+                             double scaleX, double scaleY,
+                             IScaler* scaler,
+                             int threads,
+                             int blockSize,
+                             bool useGpu,
+                             int algoIndex,
+                             bool enableSharpen) {
+    m_inputPath = inputPath;
+    m_outputPath = outputPath;
+    m_outWidth = outWidth;
+    m_outHeight = outHeight;
+    m_scaleX = scaleX;
+    m_scaleY = scaleY;
+    m_scaler = scaler;
+    m_threads = std::max(1, threads);
+    m_blockSize = std::max(16, blockSize);
+    m_useGpu = useGpu;
+    m_algoIndex = algoIndex;
+    m_enableSharpen = enableSharpen;
+}
+
+void VideoExporter::cancel() {
+    m_cancelRequested = true;
+}
+
+void VideoExporter::run() {
+    m_cancelRequested = false;
+
+    cv::VideoCapture cap(m_inputPath.toStdString());
+    if (!cap.isOpened()) {
+        emit finishedError("Не вдалося відкрити вхідний відеофайл:\n" + m_inputPath);
+        return;
+    }
+
+    int inW = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
+    int inH = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
+    double inFps = cap.get(cv::CAP_PROP_FPS);
+    if (inFps <= 0.0 || std::isnan(inFps)) {
+        inFps = 30.0;
+    }
+    int totalFrames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
+
+    int outW = m_outWidth;
+    int outH = m_outHeight;
+    if (outW <= 0 || outH <= 0) {
+        outW = static_cast<int>(std::round(inW * m_scaleX));
+        outH = static_cast<int>(std::round(inH * m_scaleY));
+    }
+    // Кодеки MPEG4/H264 вимагають парних розмірів
+    if (outW % 2 != 0) outW++;
+    if (outH % 2 != 0) outH++;
+
+    int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
+    if (m_outputPath.endsWith(".avi", Qt::CaseInsensitive)) {
+        fourcc = cv::VideoWriter::fourcc('M', 'J', 'P', 'G');
+    }
+
+    cv::VideoWriter writer;
+    bool opened = writer.open(m_outputPath.toStdString(), fourcc, inFps, cv::Size(outW, outH));
+    if (!opened) {
+        fourcc = cv::VideoWriter::fourcc('M', 'J', 'P', 'G');
+        opened = writer.open(m_outputPath.toStdString(), fourcc, inFps, cv::Size(outW, outH));
+    }
+
+    if (!opened) {
+        emit finishedError("Не вдалося створити вихідний файл відео. Перевірте шлях до файлу та права доступу:\n" + m_outputPath);
+        return;
+    }
+
+    std::vector<cv::Rect> blocks = ParallelEngine::GenerateGrid(outW, outH, m_blockSize, m_blockSize);
+    GpuScaler::Algorithm gpuAlgo = static_cast<GpuScaler::Algorithm>(m_algoIndex);
+
+    auto startTime = std::chrono::steady_clock::now();
+    int processedFrames = 0;
+    cv::Mat frame;
+
+    while (!m_cancelRequested) {
+        if (!cap.read(frame) || frame.empty()) {
+            break;
+        }
+
+        cv::Mat scaledFrame = cv::Mat::zeros(outH, outW, frame.type());
+
+        if (m_useGpu && GpuScaler::isAvailable()) {
+            GpuScaler::scaleFrame(frame, scaledFrame, outW, outH, gpuAlgo, m_enableSharpen);
+        } else if (m_scaler != nullptr) {
+            ParallelEngine::ScaleImage(frame, scaledFrame, blocks, *m_scaler, m_scaleX, m_scaleY, m_threads);
+        } else {
+            cv::resize(frame, scaledFrame, cv::Size(outW, outH));
+        }
+
+        writer.write(scaledFrame);
+        processedFrames++;
+
+        auto now = std::chrono::steady_clock::now();
+        double elapsedSec = std::chrono::duration<double>(now - startTime).count();
+        double curFps = (elapsedSec > 0.0) ? (processedFrames / elapsedSec) : 0.0;
+        double remainingSec = 0.0;
+        if (curFps > 0.0 && totalFrames > processedFrames) {
+            remainingSec = (totalFrames - processedFrames) / curFps;
+        }
+
+        emit progressChanged(processedFrames, totalFrames, curFps, elapsedSec, remainingSec);
+    }
+
+    writer.release();
+    cap.release();
+
+    if (m_cancelRequested) {
+        QFile::remove(m_outputPath);
+        emit exportCanceled();
+    } else {
+        auto endTime = std::chrono::steady_clock::now();
+        double totalTimeSec = std::chrono::duration<double>(endTime - startTime).count();
+        double avgFps = (totalTimeSec > 0.0) ? (processedFrames / totalTimeSec) : 0.0;
+        emit finishedSuccess(processedFrames, totalTimeSec, avgFps, outW, outH);
+    }
 }

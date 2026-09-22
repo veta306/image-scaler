@@ -19,6 +19,9 @@
 #include <iomanip>
 #include <QPainter>
 #include <QHeaderView>
+#include <QProgressDialog>
+#include <QFileInfo>
+#include <QDir>
 
 /**
  * @brief Конструктор головного вікна MainWindow.
@@ -161,8 +164,13 @@ void MainWindow::setupUI() {
     threadLayout->addWidget(sliderThreads);
     threadLayout->addWidget(spinThreads);
 
+    chkDisableSingleThread = new QCheckBox("Вимкнути однопоточний режим", parallelGroup);
+    chkDisableSingleThread->setChecked(false);
+    chkDisableSingleThread->setToolTip("Пропускає замір послідовної обробки для максимальної швидкості");
+
     parallelForm->addRow("Розмір блоку, пікселів:", comboBlockSize);
     parallelForm->addRow("Кількість потоків:", threadLayout);
+    parallelForm->addRow("", chkDisableSingleThread);
     
     sidebarLayout->addWidget(parallelGroup);
 
@@ -178,12 +186,23 @@ void MainWindow::setupUI() {
     chkEnableSIMD = new QCheckBox("Апаратна векторизація AVX2", filterGroup);
     chkEnableSIMD->setChecked(true);
     
+    chkEnableGPU = new QCheckBox("Прискорення на відеокарті", filterGroup);
+    if (GpuScaler::isAvailable()) {
+        chkEnableGPU->setChecked(false);
+        chkEnableGPU->setToolTip(QString("Виявлено адаптер: %1").arg(GpuScaler::getDeviceName()));
+    } else {
+        chkEnableGPU->setChecked(false);
+        chkEnableGPU->setEnabled(false);
+        chkEnableGPU->setToolTip("Сумісний графічний адаптер не знайдено");
+    }
+
     chkEnableDemo = new QCheckBox("Візуалізація черги блоків", filterGroup);
     chkEnableDemo->setChecked(false);
 
     filterLayout->addWidget(chkEnableSharpen);
     filterLayout->addWidget(chkEnableOverlap);
     filterLayout->addWidget(chkEnableSIMD);
+    filterLayout->addWidget(chkEnableGPU);
     filterLayout->addWidget(chkEnableDemo);
     
     sidebarLayout->addWidget(filterGroup);
@@ -267,6 +286,9 @@ void MainWindow::setupUI() {
     btnLoadVideo->setCursor(Qt::PointingHandCursor);
     btnWebcam = new QPushButton("Веб-камера", tabVideo);
     btnWebcam->setCursor(Qt::PointingHandCursor);
+    btnExportVideo = new QPushButton("Зберегти масштабоване відео...", tabVideo);
+    btnExportVideo->setCursor(Qt::PointingHandCursor);
+    btnExportVideo->setEnabled(false);
     btnVideoRecord = new QPushButton("Запис у файл...", tabVideo);
     btnVideoRecord->setCursor(Qt::PointingHandCursor);
     chkRealtimeMode = new QCheckBox("Синхронізація з частотою джерела", tabVideo);
@@ -274,6 +296,7 @@ void MainWindow::setupUI() {
 
     videoTopBar->addWidget(btnLoadVideo);
     videoTopBar->addWidget(btnWebcam);
+    videoTopBar->addWidget(btnExportVideo);
     videoTopBar->addWidget(btnVideoRecord);
     videoTopBar->addWidget(chkRealtimeMode);
     videoTopBar->addStretch();
@@ -398,7 +421,7 @@ void MainWindow::setupUI() {
     benchLayout->setSpacing(15);
     
     QHBoxLayout* benchHeader = new QHBoxLayout();
-    QLabel* lblBenchDesc = new QLabel("Порівняння конфігурацій блоків і потоків з еталоном OpenCV:", tabBenchmark);
+    QLabel* lblBenchDesc = new QLabel("Порівняння швидкодії та якості для різних конфігурацій:", tabBenchmark);
     lblBenchDesc->setStyleSheet("font-weight: bold; font-size: 11px;");
     
     btnExportCsv = new QPushButton("Експорт у CSV", tabBenchmark);
@@ -465,6 +488,7 @@ void MainWindow::setupUI() {
     connect(btnVideoPlay, &QPushButton::clicked, this, &MainWindow::onVideoPlayClicked);
     connect(btnVideoPause, &QPushButton::clicked, this, &MainWindow::onVideoPauseClicked);
     connect(btnVideoStop, &QPushButton::clicked, this, &MainWindow::onVideoStopClicked);
+    connect(btnExportVideo, &QPushButton::clicked, this, &MainWindow::onExportVideoClicked);
     connect(btnVideoRecord, &QPushButton::clicked, this, &MainWindow::onVideoRecordClicked);
     connect(sliderVideoProgress, &QSlider::sliderMoved, this, &MainWindow::onVideoSeekSliderMoved);
     connect(chkRealtimeMode, &QCheckBox::toggled, this, [this](bool checked) {
@@ -500,6 +524,15 @@ void MainWindow::setupUI() {
     });
     connect(chkEnableSIMD, &QCheckBox::toggled, this, [this](bool) {
         syncVideoProcessorParams();
+    });
+    connect(chkEnableGPU, &QCheckBox::toggled, this, [this](bool checked) {
+        syncVideoProcessorParams();
+        if (checked) {
+            metricsController.AddLog("Активовано режим обчислень на відеокарті: " + GpuScaler::getDeviceName().toStdString());
+        } else {
+            metricsController.AddLog("Активовано режим обчислень на процесорі.");
+        }
+        updateLogsDisplay();
     });
 }
 
@@ -683,6 +716,9 @@ QString MainWindow::getActiveScalerName() const {
     else if (index == 2) name = "Lanczos-3";
     else if (index == 3) name = "Adaptive Sobel";
 
+    if (chkEnableGPU && chkEnableGPU->isChecked()) {
+        return name + " GPU";
+    }
     if (chkEnableSIMD->isChecked()) {
         return name + " AVX2";
     }
@@ -746,19 +782,27 @@ void MainWindow::onProcessClicked() {
     metricsController.AddLog(sGrid.str());
     updateLogsDisplay();
 
-    metricsController.AddLog("Запуск послідовної обробки в один потік...");
-    updateLogsDisplay();
-    QCoreApplication::processEvents();
+    double t1_duration = 0.0;
+    bool skipSingleThread = chkDisableSingleThread && chkDisableSingleThread->isChecked();
 
-    auto t1_start = std::chrono::high_resolution_clock::now();
-    ParallelEngine::ScaleImage(originalImage, singleResult, blocks, scaler, scaleX, scaleY, 1);
-    auto t1_end = std::chrono::high_resolution_clock::now();
-    double t1_duration = std::chrono::duration<double, std::milli>(t1_end - t1_start).count();
+    if (!skipSingleThread) {
+        metricsController.AddLog("Запуск послідовної обробки в один потік...");
+        updateLogsDisplay();
+        QCoreApplication::processEvents();
 
-    std::stringstream sT1;
-    sT1 << std::fixed << std::setprecision(2) << "Послідовний режим завершено за " << t1_duration << " мс.";
-    metricsController.AddLog(sT1.str());
-    updateLogsDisplay();
+        auto t1_start = std::chrono::high_resolution_clock::now();
+        ParallelEngine::ScaleImage(originalImage, singleResult, blocks, scaler, scaleX, scaleY, 1);
+        auto t1_end = std::chrono::high_resolution_clock::now();
+        t1_duration = std::chrono::duration<double, std::milli>(t1_end - t1_start).count();
+
+        std::stringstream sT1;
+        sT1 << std::fixed << std::setprecision(2) << "Послідовний режим завершено за " << t1_duration << " мс.";
+        metricsController.AddLog(sT1.str());
+        updateLogsDisplay();
+    } else {
+        metricsController.AddLog("Послідовний режим пропущено користувачем.");
+        updateLogsDisplay();
+    }
 
     std::stringstream sOMPStart;
     sOMPStart << "Запуск паралельної обробки OpenMP (" << threads << " потоків)...";
@@ -767,7 +811,31 @@ void MainWindow::onProcessClicked() {
     QCoreApplication::processEvents();
 
     double tp_duration = 0.0;
-    if (chkEnableDemo->isChecked()) {
+    bool isGpu = chkEnableGPU && chkEnableGPU->isChecked() && GpuScaler::isAvailable();
+
+    if (isGpu) {
+        std::stringstream sGpuStart;
+        sGpuStart << "Запуск обробки на відеокарті: " << GpuScaler::getDeviceName().toStdString() << "...";
+        metricsController.AddLog(sGpuStart.str());
+        updateLogsDisplay();
+        QCoreApplication::processEvents();
+
+        GpuScaler::Timing timing;
+        GpuScaler::Algorithm algo = static_cast<GpuScaler::Algorithm>(comboAlgorithm->currentIndex());
+        bool sharpen = chkEnableSharpen->isChecked();
+        GpuScaler::scaleFrame(originalImage, scaledImage, outWidth, outHeight, algo, sharpen, &timing);
+        tp_duration = timing.totalMs;
+
+        viewerScaled->setImage(scaledImage);
+        viewerScaled->setZoom(1.0);
+
+        std::stringstream sGpuEnd;
+        sGpuEnd << std::fixed << std::setprecision(2)
+                << "Обробку на відеокарті завершено за " << tp_duration << " мс. [Пам'ять: "
+                << (timing.uploadMs + timing.downloadMs) << " мс, Ядро: " << timing.kernelMs << " мс]";
+        metricsController.AddLog(sGpuEnd.str());
+        updateLogsDisplay();
+    } else if (chkEnableDemo->isChecked()) {
         scaledImage = cv::Mat::zeros(outHeight, outWidth, originalImage.type());
         scaledImage = cv::Scalar(40, 40, 40);
         
@@ -849,12 +917,22 @@ void MainWindow::onProcessClicked() {
         viewerScaled->setZoom(1.0);
     }
 
-    std::stringstream sTp;
-    sTp << std::fixed << std::setprecision(2) << "Паралельний режим завершено за " << tp_duration << " мс.";
-    metricsController.AddLog(sTp.str());
-    updateLogsDisplay();
+    if (!isGpu) {
+        std::stringstream sTp;
+        sTp << std::fixed << std::setprecision(2) << "Паралельний режим завершено за " << tp_duration << " мс.";
+        metricsController.AddLog(sTp.str());
+        updateLogsDisplay();
+    }
 
-    ScalingMetrics metrics = MetricsController::CalculateMetrics(t1_duration, tp_duration, threads);
+    ScalingMetrics metrics = MetricsController::CalculateMetrics(t1_duration, tp_duration, isGpu ? 0 : threads);
+    if (isGpu) {
+        metrics.threadCount = 0;
+    }
+    if (skipSingleThread) {
+        metrics.singleThreadedTimeMs = 0.0;
+        metrics.speedup = 0.0;
+        metrics.efficiency = 0.0;
+    }
     metrics.blockSizeX = blockSize;
     metrics.blockSizeY = blockSize;
     metrics.imageWidth = outWidth;
@@ -910,22 +988,35 @@ void MainWindow::updateLogsDisplay() {
  * @brief Оновлює картки показників та гістограми в GUI на основі розрахованих метрик.
  */
 void MainWindow::updateMetricsDisplay(const ScalingMetrics& metrics) {
-    lblSingleTimeVal->setText(QString::number(metrics.singleThreadedTimeMs, 'f', 1));
-    lblMultiTimeVal->setText(QString::number(metrics.multiThreadedTimeMs, 'f', 1));
-    lblSpeedupVal->setText(QString::number(metrics.speedup, 'f', 2));
-    lblEfficiencyVal->setText(QString::number(metrics.efficiency, 'f', 1));
-
-    double singleFps = (metrics.singleThreadedTimeMs > 0.0) ? (1000.0 / metrics.singleThreadedTimeMs) : 0.0;
-    double multiFps = (metrics.multiThreadedTimeMs > 0.0) ? (1000.0 / metrics.multiThreadedTimeMs) : 0.0;
-
-    lblSingleFps->setText(QString("%1 FPS").arg(singleFps, 0, 'f', 1));
-    lblMultiFps->setText(QString("%1 FPS").arg(multiFps, 0, 'f', 1));
-
-    if (singleFps >= 30.0) {
-        lblSingleFps->setStyleSheet("font-size: 12px; font-weight: bold; color: #27ae60;");
+    bool hasSingle = (metrics.singleThreadedTimeMs > 0.0);
+    if (hasSingle) {
+        lblSingleTimeVal->setText(QString::number(metrics.singleThreadedTimeMs, 'f', 1));
+        double singleFps = 1000.0 / metrics.singleThreadedTimeMs;
+        lblSingleFps->setText(QString("%1 FPS").arg(singleFps, 0, 'f', 1));
+        if (singleFps >= 30.0) {
+            lblSingleFps->setStyleSheet("font-size: 12px; font-weight: bold; color: #27ae60;");
+        } else {
+            lblSingleFps->setStyleSheet("font-size: 12px; font-weight: bold; color: #c0392b;");
+        }
+        lblSpeedupVal->setText(QString::number(metrics.speedup, 'f', 2));
+        if (metrics.threadCount <= 0) {
+            lblEfficiencyVal->setText("N/A");
+        } else {
+            lblEfficiencyVal->setText(QString::number(metrics.efficiency, 'f', 1));
+        }
+        barSingleTime->setFormat("%v мс");
     } else {
-        lblSingleFps->setStyleSheet("font-size: 12px; font-weight: bold; color: #c0392b;");
+        lblSingleTimeVal->setText("Вимкнено");
+        lblSingleFps->setText("--- FPS");
+        lblSingleFps->setStyleSheet("font-size: 12px; font-weight: bold; color: #7f8c8d;");
+        lblSpeedupVal->setText("---");
+        lblEfficiencyVal->setText("---");
+        barSingleTime->setFormat("Вимкнено");
     }
+
+    lblMultiTimeVal->setText(QString::number(metrics.multiThreadedTimeMs, 'f', 1));
+    double multiFps = (metrics.multiThreadedTimeMs > 0.0) ? (1000.0 / metrics.multiThreadedTimeMs) : 0.0;
+    lblMultiFps->setText(QString("%1 FPS").arg(multiFps, 0, 'f', 1));
 
     if (multiFps >= 30.0) {
         lblMultiFps->setStyleSheet("font-size: 12px; font-weight: bold; color: #27ae60;");
@@ -938,27 +1029,38 @@ void MainWindow::updateMetricsDisplay(const ScalingMetrics& metrics) {
     lblSsimVal->setText(QString::number(metrics.ssim, 'f', 4));
     lblActiveAlgorithmVal->setText(getActiveScalerName());
 
-    int singleVal = static_cast<int>(metrics.singleThreadedTimeMs);
     int multiVal = static_cast<int>(metrics.multiThreadedTimeMs);
-    
-    int maxVal = std::max({1, singleVal, multiVal});
-    
-    barSingleTime->setRange(0, maxVal);
-    barSingleTime->setValue(singleVal);
-    
-    barMultiTime->setRange(0, maxVal);
-    barMultiTime->setValue(multiVal);
+    if (hasSingle) {
+        int singleVal = static_cast<int>(metrics.singleThreadedTimeMs);
+        int maxVal = std::max({1, singleVal, multiVal});
+        barSingleTime->setRange(0, maxVal);
+        barSingleTime->setValue(singleVal);
+        barMultiTime->setRange(0, maxVal);
+        barMultiTime->setValue(multiVal);
+    } else {
+        barSingleTime->setRange(0, 100);
+        barSingleTime->setValue(0);
+        barMultiTime->setRange(0, std::max(1, multiVal));
+        barMultiTime->setValue(multiVal);
+    }
 
     std::stringstream ssSummary;
     ssSummary << "\n=== СТАТИСТИКА ЕФЕКТИВНОСТІ ===\n"
               << "Розмір зображення: " << metrics.imageWidth << " x " << metrics.imageHeight << " px\n"
               << "Розмір блоку обробки: " << metrics.blockSizeX << " x " << metrics.blockSizeY << " px\n"
-              << "Задіяно ядер процесора: " << metrics.threadCount << "\n"
-              << "Послідовний режим T1: " << std::fixed << std::setprecision(2) << metrics.singleThreadedTimeMs << " мс, " << singleFps << " FPS\n"
-              << "Паралельний режим Tp: " << metrics.multiThreadedTimeMs << " мс, " << multiFps << " FPS\n"
-              << "Отримане прискорення S: " << metrics.speedup << "x\n"
-              << "Ефективність використання ядер E: " << metrics.efficiency << "%\n"
-              << "Якість PSNR: " << metrics.psnr << " dB\n"
+              << "Задіяно ядер процесора: " << metrics.threadCount << "\n";
+    if (hasSingle) {
+        double singleFps = 1000.0 / metrics.singleThreadedTimeMs;
+        ssSummary << "Послідовний режим T1: " << std::fixed << std::setprecision(2) << metrics.singleThreadedTimeMs << " мс, " << singleFps << " FPS\n";
+    } else {
+        ssSummary << "Послідовний режим T1: вимкнено\n";
+    }
+    ssSummary << "Паралельний режим Tp: " << metrics.multiThreadedTimeMs << " мс, " << multiFps << " FPS\n";
+    if (hasSingle) {
+        ssSummary << "Отримане прискорення S: " << metrics.speedup << "x\n"
+                  << "Ефективність використання ядер E: " << metrics.efficiency << "%\n";
+    }
+    ssSummary << "Якість PSNR: " << metrics.psnr << " dB\n"
               << "Індекс SSIM: " << metrics.ssim << "\n"
               << "=================================";
                
@@ -1100,51 +1202,61 @@ void MainWindow::onRunBenchmarkClicked() {
     IScaler& scaler = getActiveScaler();
     QString methodName = getActiveScalerName();
 
-    cv::Mat cvResult;
-    auto cv_start = std::chrono::high_resolution_clock::now();
-    cv::resize(originalImage, cvResult, cv::Size(outWidth, outHeight), 0, 0, cv::INTER_LINEAR);
-    auto cv_end = std::chrono::high_resolution_clock::now();
-    double cvDuration = std::chrono::duration<double, std::milli>(cv_end - cv_start).count();
-    double cvFps = (cvDuration > 0.0) ? (1000.0 / cvDuration) : 0.0;
+    if (GpuScaler::isAvailable()) {
+        GpuScaler::Timing gpuTiming;
+        GpuScaler::Algorithm algo = static_cast<GpuScaler::Algorithm>(comboAlgorithm->currentIndex());
+        bool sharpen = chkEnableSharpen->isChecked();
+        cv::Mat gpuResult;
+        GpuScaler::scaleFrame(originalImage, gpuResult, outWidth, outHeight, algo, sharpen, &gpuTiming);
 
-    int rCv = tableBenchmark->rowCount();
-    tableBenchmark->insertRow(rCv);
-    
-    QTableWidgetItem* itemMethod = new QTableWidgetItem("Еталон OpenCV resize");
-    QTableWidgetItem* itemBlock = new QTableWidgetItem("Суцільний кадр");
-    QTableWidgetItem* itemThreads = new QTableWidgetItem("Максимум потоків");
-    QTableWidgetItem* itemTime = new QTableWidgetItem(QString::number(cvDuration, 'f', 1));
-    QTableWidgetItem* itemFps = new QTableWidgetItem(QString::number(cvFps, 'f', 1));
-    QTableWidgetItem* itemMse = new QTableWidgetItem("0.0000");
-    QTableWidgetItem* itemPsnr = new QTableWidgetItem("99.00");
-    QTableWidgetItem* itemSsim = new QTableWidgetItem("1.0000");
+        double gpuFps = (gpuTiming.totalMs > 0.0) ? (1000.0 / gpuTiming.totalMs) : 0.0;
+        double gpuMse = 0.0, gpuPsnr = 0.0, gpuSsim = 1.0;
+        if (!originalImage.empty() && !gpuResult.empty()) {
+            cv::Mat tempResized;
+            cv::resize(gpuResult, tempResized, originalImage.size(), 0, 0, cv::INTER_LINEAR);
+            gpuMse = MetricsController::CalculateMSE(originalImage, tempResized);
+            gpuPsnr = MetricsController::CalculatePSNR(originalImage, tempResized);
+            gpuSsim = MetricsController::CalculateSSIM(originalImage, tempResized);
+        }
 
-    tableBenchmark->setItem(rCv, 0, itemMethod);
-    tableBenchmark->setItem(rCv, 1, itemBlock);
-    tableBenchmark->setItem(rCv, 2, itemThreads);
-    tableBenchmark->setItem(rCv, 3, itemTime);
-    tableBenchmark->setItem(rCv, 4, itemFps);
-    tableBenchmark->setItem(rCv, 5, itemMse);
-    tableBenchmark->setItem(rCv, 6, itemPsnr);
-    tableBenchmark->setItem(rCv, 7, itemSsim);
+        int rGpu = tableBenchmark->rowCount();
+        tableBenchmark->insertRow(rGpu);
 
-    for (int col = 0; col < 8; ++col) {
-        tableBenchmark->item(rCv, col)->setBackground(QColor("#f1f2f6"));
-        tableBenchmark->item(rCv, col)->setForeground(QColor("#2f3542"));
-        tableBenchmark->item(rCv, col)->setTextAlignment(Qt::AlignCenter);
+        QString gpuMethod = QString("%1 GPU").arg(getActiveScalerName().split(' ').first());
+        QTableWidgetItem* itemGpuM = new QTableWidgetItem(gpuMethod);
+        QTableWidgetItem* itemGpuB = new QTableWidgetItem("Суцільний кадр VRAM");
+        QTableWidgetItem* itemGpuT = new QTableWidgetItem("Ядра GPU");
+        QTableWidgetItem* itemGpuTi = new QTableWidgetItem(QString::number(gpuTiming.totalMs, 'f', 1));
+        QTableWidgetItem* itemGpuF = new QTableWidgetItem(QString::number(gpuFps, 'f', 1));
+        QTableWidgetItem* itemGpuMs = new QTableWidgetItem(QString::number(gpuMse, 'f', 4));
+        QTableWidgetItem* itemGpuP = new QTableWidgetItem(QString::number(gpuPsnr, 'f', 2));
+        QTableWidgetItem* itemGpuS = new QTableWidgetItem(QString::number(gpuSsim, 'f', 4));
+
+        tableBenchmark->setItem(rGpu, 0, itemGpuM);
+        tableBenchmark->setItem(rGpu, 1, itemGpuB);
+        tableBenchmark->setItem(rGpu, 2, itemGpuT);
+        tableBenchmark->setItem(rGpu, 3, itemGpuTi);
+        tableBenchmark->setItem(rGpu, 4, itemGpuF);
+        tableBenchmark->setItem(rGpu, 5, itemGpuMs);
+        tableBenchmark->setItem(rGpu, 6, itemGpuP);
+        tableBenchmark->setItem(rGpu, 7, itemGpuS);
+
+        for (int col = 0; col < 8; ++col) {
+            tableBenchmark->item(rGpu, col)->setTextAlignment(Qt::AlignCenter);
+        }
+        tableBenchmark->item(rGpu, 0)->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+
+        BenchmarkRecord gpuRecord;
+        gpuRecord.method = gpuMethod.toStdString();
+        gpuRecord.blockSize = "VRAM";
+        gpuRecord.threads = 0;
+        gpuRecord.durationMs = gpuTiming.totalMs;
+        gpuRecord.fps = gpuFps;
+        gpuRecord.mse = gpuMse;
+        gpuRecord.psnr = gpuPsnr;
+        gpuRecord.ssim = gpuSsim;
+        currentBenchmarkRecords.push_back(gpuRecord);
     }
-    tableBenchmark->item(rCv, 0)->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-
-    BenchmarkRecord cvRecord;
-    cvRecord.method = "Еталон OpenCV resize";
-    cvRecord.blockSize = "N/A";
-    cvRecord.threads = omp_get_max_threads();
-    cvRecord.durationMs = cvDuration;
-    cvRecord.fps = cvFps;
-    cvRecord.mse = 0.0;
-    cvRecord.psnr = 99.0;
-    cvRecord.ssim = 1.0;
-    currentBenchmarkRecords.push_back(cvRecord);
 
     std::vector<int> testBlockSizes = {16, 64, 256};
 
@@ -1318,6 +1430,9 @@ void MainWindow::syncVideoProcessorParams() {
     int bs = comboBlockSize->itemData(comboBlockSize->currentIndex()).toInt();
     videoProcessor->setBlockSize(bs);
     videoProcessor->setRealtimeMode(chkRealtimeMode->isChecked());
+    videoProcessor->setUseGpu(chkEnableGPU && chkEnableGPU->isChecked());
+    videoProcessor->setAlgorithmIndex(comboAlgorithm->currentIndex());
+    videoProcessor->setEnableSharpen(chkEnableSharpen->isChecked());
 }
 
 /**
@@ -1329,11 +1444,13 @@ void MainWindow::onLoadVideoClicked() {
     if (filePath.isEmpty()) return;
 
     if (videoProcessor->openVideo(filePath)) {
+        currentVideoPath = filePath;
         btnVideoPlay->setEnabled(true);
         btnVideoPause->setEnabled(false);
         btnVideoStop->setEnabled(false);
+        btnExportVideo->setEnabled(true);
         sliderVideoProgress->setEnabled(true);
-        lblVideoDisplay->setText("Відео завантажено.\nНатисніть 'Відтворити' для початку масштабування.");
+        lblVideoDisplay->setText("Відео завантажено.\nНатисніть 'Відтворити' для перегляду або 'Зберегти масштабоване відео'.");
     }
 }
 
@@ -1342,9 +1459,11 @@ void MainWindow::onLoadVideoClicked() {
  */
 void MainWindow::onWebcamClicked() {
     if (videoProcessor->openCamera(0)) {
+        currentVideoPath.clear();
         btnVideoPlay->setEnabled(true);
         btnVideoPause->setEnabled(false);
         btnVideoStop->setEnabled(false);
+        btnExportVideo->setEnabled(false);
         sliderVideoProgress->setEnabled(false);
         lblVideoDisplay->setText("Веб-камеру підключено.\nНатисніть 'Відтворити' для запуску трансляції.");
     }
@@ -1374,6 +1493,9 @@ void MainWindow::onVideoPauseClicked() {
  * @brief Зупиняє відтворення відеопотоку та скидає прогрес.
  */
 void MainWindow::onVideoStopClicked() {
+    if (isRecordingVideo) {
+        onVideoRecordClicked();
+    }
     videoProcessor->stop();
     btnVideoPlay->setEnabled(true);
     btnVideoPause->setEnabled(false);
@@ -1382,7 +1504,7 @@ void MainWindow::onVideoStopClicked() {
 }
 
 /**
- * @brief Вмикає або вимикає збереження масштабованого відеопотоку у файл.
+ * @brief Вмикає або вимикає прямий запис масштабованого відеопотоку у файл під час відтворення.
  */
 void MainWindow::onVideoRecordClicked() {
     if (isRecordingVideo) {
@@ -1390,18 +1512,142 @@ void MainWindow::onVideoRecordClicked() {
         videoProcessor->setSaveOutput(false);
         btnVideoRecord->setText("Запис у файл...");
         btnVideoRecord->setStyleSheet("");
-        QMessageBox::information(this, "Запис зупинено", "Запис відео успішно збережено у файл:\n" + outputVideoPath);
+        QMessageBox::information(this, "Запис зупинено", 
+            "Запис відеопотоку успішно збережено у файл:\n" + QDir::toNativeSeparators(outputRecordPath));
     } else {
+        if (!videoProcessor || !videoProcessor->isOpen()) {
+            QMessageBox::warning(this, "Увага", "Спочатку завантажте відеофайл або підключіть веб-камеру!");
+            return;
+        }
+
+        QString defaultName = "recorded_video.mp4";
+        if (!currentVideoPath.isEmpty()) {
+            QFileInfo fi(currentVideoPath);
+            defaultName = fi.path() + "/" + fi.baseName() + "_record.mp4";
+        }
+
         QString savePath = QFileDialog::getSaveFileName(this, 
-            "Оберіть файл для збереження відео", "scaled_video.mp4", "MP4 Video (*.mp4);;AVI Video (*.avi)");
+            "Оберіть файл для запису відео", defaultName, "MP4 Video (*.mp4);;AVI Video (*.avi)");
         if (savePath.isEmpty()) return;
 
-        outputVideoPath = savePath;
+        outputRecordPath = savePath;
         isRecordingVideo = true;
-        videoProcessor->setSaveOutput(true, outputVideoPath);
+        videoProcessor->setSaveOutput(true, outputRecordPath);
         btnVideoRecord->setText("● Зупинити запис");
         btnVideoRecord->setStyleSheet("background-color: #e74c3c; color: white; font-weight: bold;");
     }
+}
+
+/**
+ * @brief Виконує фоновий пакетний експорт масштабованого відео з поточними параметрами,
+ * відображаючи діалогове вікно прогресу з оцінкою швидкодії та часу.
+ */
+void MainWindow::onExportVideoClicked() {
+    if (currentVideoPath.isEmpty()) {
+        QMessageBox::warning(this, "Увага", "Спочатку завантажте відеофайл через кнопку 'Завантажити відеофайл'!");
+        return;
+    }
+
+    QFileInfo fi(currentVideoPath);
+    QString defaultOut = fi.path() + "/" + fi.baseName() + "_scaled.mp4";
+    QString savePath = QFileDialog::getSaveFileName(this, 
+        "Зберегти масштабоване відео", defaultOut, "MP4 Video (*.mp4);;AVI Video (*.avi)");
+    if (savePath.isEmpty()) {
+        return;
+    }
+
+    // Зупиняємо перегляд у плеєрі
+    if (videoProcessor && videoProcessor->isPlaying()) {
+        videoProcessor->pause();
+        btnVideoPlay->setEnabled(true);
+        btnVideoPause->setEnabled(false);
+    }
+
+    int outW = 0, outH = 0;
+    double sX = 1.0, sY = 1.0;
+    if (comboScalingMode->currentIndex() == 0) {
+        double s = spinCustomScale->value();
+        sX = s;
+        sY = s;
+    } else {
+        outW = spinTargetWidth->value();
+        outH = spinTargetHeight->value();
+    }
+
+    int blockSize = comboBlockSize->itemData(comboBlockSize->currentIndex()).toInt();
+    int threads = spinThreads->value();
+    bool useGpu = chkEnableGPU && chkEnableGPU->isChecked();
+    int algoIndex = comboAlgorithm->currentIndex();
+    bool enableSharpen = chkEnableSharpen->isChecked();
+    IScaler* scaler = &getActiveScaler();
+
+    QProgressDialog* progressDlg = new QProgressDialog("Ініціалізація експорту відео...", "Скасувати", 0, 100, this);
+    progressDlg->setWindowModality(Qt::WindowModal);
+    progressDlg->setWindowTitle("Збереження масштабованого відео");
+    progressDlg->setMinimumDuration(0);
+    progressDlg->setValue(0);
+    progressDlg->resize(440, 130);
+
+    VideoExporter* exporter = new VideoExporter(this);
+    exporter->setParams(currentVideoPath, savePath, outW, outH, sX, sY, scaler, threads, blockSize, useGpu, algoIndex, enableSharpen);
+
+    connect(progressDlg, &QProgressDialog::canceled, exporter, [exporter]() {
+        exporter->cancel();
+    });
+
+    connect(exporter, &VideoExporter::progressChanged, this, [progressDlg](int cur, int total, double fps, double /*elapsedSec*/, double remSec) {
+        if (total > 0) {
+            progressDlg->setMaximum(total);
+            progressDlg->setValue(cur);
+            int percent = static_cast<int>(std::round((cur * 100.0) / total));
+            progressDlg->setLabelText(QString("Оброблено: %1 з %2 кадрів (%3%)\nШвидкість: %4 FPS | Залишилось: ~%5 с")
+                .arg(cur).arg(total).arg(percent)
+                .arg(fps, 0, 'f', 1)
+                .arg(static_cast<int>(std::ceil(remSec))));
+        } else {
+            progressDlg->setValue(cur);
+            progressDlg->setLabelText(QString("Оброблено кадрів: %1 (Швидкість: %2 FPS)")
+                .arg(cur).arg(fps, 0, 'f', 1));
+        }
+    });
+
+    connect(exporter, &VideoExporter::finishedSuccess, this, [this, progressDlg, exporter, savePath, useGpu, threads](int totalFrames, double totalSec, double avgFps, int finalW, int finalH) {
+        progressDlg->close();
+        progressDlg->deleteLater();
+        exporter->deleteLater();
+
+        QString deviceStr = useGpu ? "Відеокарта (GPU OpenCL)" : QString("Центральний процесор (%1 потоків)").arg(threads);
+        QMessageBox::information(this, "Збереження завершено",
+            QString("Масштабоване відео успішно збережено!\n\n"
+                    "Файл: %1\n"
+                    "Роздільна здатність: %2 x %3 px\n"
+                    "Всього кадрів: %4\n"
+                    "Витрачений час: %5 с\n"
+                    "Середня швидкодія: %6 FPS\n"
+                    "Обчислювальний пристрій: %7")
+                .arg(QDir::toNativeSeparators(savePath))
+                .arg(finalW).arg(finalH)
+                .arg(totalFrames)
+                .arg(totalSec, 0, 'f', 1)
+                .arg(avgFps, 0, 'f', 1)
+                .arg(deviceStr));
+    });
+
+    connect(exporter, &VideoExporter::finishedError, this, [this, progressDlg, exporter](const QString& err) {
+        progressDlg->close();
+        progressDlg->deleteLater();
+        exporter->deleteLater();
+        QMessageBox::critical(this, "Помилка збереження", err);
+    });
+
+    connect(exporter, &VideoExporter::exportCanceled, this, [this, progressDlg, exporter]() {
+        progressDlg->close();
+        progressDlg->deleteLater();
+        exporter->deleteLater();
+        QMessageBox::information(this, "Збереження скасовано", "Експорт відео було перервано.");
+    });
+
+    exporter->start();
 }
 
 /**
@@ -1433,7 +1679,7 @@ void MainWindow::onVideoFrameProcessed(const QImage& frame, double frameMs, doub
     QPixmap pix = QPixmap::fromImage(frame);
     QSize dispSize = lblVideoDisplay->size();
     if (dispSize.width() > 10 && dispSize.height() > 10) {
-        pix = pix.scaled(dispSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        pix = pix.scaled(dispSize, Qt::KeepAspectRatio, Qt::FastTransformation);
     }
     lblVideoDisplay->setPixmap(pix);
 
@@ -1446,8 +1692,9 @@ void MainWindow::onVideoFrameProcessed(const QImage& frame, double frameMs, doub
         lblVideoTime->setText(QString("Кадр %1").arg(currentFrame));
     }
 
-    lblVideoStats->setText(QString("Швидкодія: %1 FPS | Час кадру: %2 мс | Алгоритм: %3 [%4 потоків]")
-        .arg(fps, 0, 'f', 1)
+    QString fpsStr = (fps > 0.0) ? QString::number(fps, 'f', 1) : "---";
+    lblVideoStats->setText(QString("Швидкодія: %1 FPS | Час алгоритму: %2 мс | Алгоритм: %3 [%4 потоків]")
+        .arg(fpsStr)
         .arg(frameMs, 0, 'f', 1)
         .arg(getActiveScalerName())
         .arg(spinThreads->value()));
@@ -1457,6 +1704,9 @@ void MainWindow::onVideoFrameProcessed(const QImage& frame, double frameMs, doub
  * @brief Обробляє завершення відтворення відеофайлу.
  */
 void MainWindow::onVideoPlaybackFinished() {
+    if (isRecordingVideo) {
+        onVideoRecordClicked();
+    }
     btnVideoPlay->setEnabled(true);
     btnVideoPause->setEnabled(false);
     btnVideoStop->setEnabled(false);

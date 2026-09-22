@@ -57,3 +57,7 @@ target_link_libraries(ParallelImageScaler PRIVATE
     ${OpenCV_LIBS}
     OpenMP::OpenMP_CXX
 )
+
+if(WIN32)
+    target_link_libraries(ParallelImageScaler PRIVATE winmm)
+endif()
