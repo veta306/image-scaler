@@ -27,12 +27,28 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Паралельний масштабувальник зображень - Курсова робота");
     resize(1200, 800);
     
+    videoProcessor = new VideoProcessor(this);
+    connect(videoProcessor, &VideoProcessor::frameProcessed, this, &MainWindow::onVideoFrameProcessed);
+    connect(videoProcessor, &VideoProcessor::videoLoaded, this, &MainWindow::onVideoLoaded);
+    connect(videoProcessor, &VideoProcessor::playbackFinished, this, &MainWindow::onVideoPlaybackFinished);
+    connect(videoProcessor, &VideoProcessor::statusChanged, this, &MainWindow::onVideoStatusChanged);
+    connect(videoProcessor, &VideoProcessor::errorOccurred, this, &MainWindow::onVideoErrorOccurred);
+
     setupUI();
     applyStyleSheet();
     
     metricsController.AddLog("Програму успішно ініціалізовано.");
     metricsController.AddLog("Виберіть вхідне зображення для початку роботи.");
     updateLogsDisplay();
+}
+
+/**
+ * @brief Деструктор головного вікна MainWindow: коректно зупиняє відеопотік.
+ */
+MainWindow::~MainWindow() {
+    if (videoProcessor) {
+        videoProcessor->stop();
+    }
 }
 
 /**
@@ -71,7 +87,10 @@ void MainWindow::setupUI() {
     scaleForm->setLabelAlignment(Qt::AlignLeft);
     
     comboAlgorithm = new QComboBox(scaleGroup);
-    comboAlgorithm->addItem("Білінійна інтерполяція", 0);
+    comboAlgorithm->addItem("Білінійна інтерполяція (Bilinear)", 0);
+    comboAlgorithm->addItem("Бікубічна інтерполяція (Bicubic 4x4)", 1);
+    comboAlgorithm->addItem("Інтерполяція Ланцоша (Lanczos-3 6x6)", 2);
+    comboAlgorithm->addItem("Адаптивна градієнтна (Adaptive Sobel)", 3);
     
     comboScalingMode = new QComboBox(scaleGroup);
     comboScalingMode->addItem("За коефіцієнтом", 0);
@@ -215,6 +234,77 @@ void MainWindow::setupUI() {
     
     tabWidget->addTab(tabCompare, "Порівняння зображень");
 
+    QWidget* tabVideo = new QWidget(tabWidget);
+    QVBoxLayout* videoTabLayout = new QVBoxLayout(tabVideo);
+    videoTabLayout->setContentsMargins(15, 15, 15, 15);
+    videoTabLayout->setSpacing(10);
+
+    QHBoxLayout* videoTopBar = new QHBoxLayout();
+    btnLoadVideo = new QPushButton("Завантажити відеофайл", tabVideo);
+    btnLoadVideo->setCursor(Qt::PointingHandCursor);
+    btnWebcam = new QPushButton("Веб-камера", tabVideo);
+    btnWebcam->setCursor(Qt::PointingHandCursor);
+    btnVideoRecord = new QPushButton("Запис у файл...", tabVideo);
+    btnVideoRecord->setCursor(Qt::PointingHandCursor);
+    chkRealtimeMode = new QCheckBox("Режим реального часу (FPS джерела)", tabVideo);
+    chkRealtimeMode->setChecked(true);
+
+    videoTopBar->addWidget(btnLoadVideo);
+    videoTopBar->addWidget(btnWebcam);
+    videoTopBar->addWidget(btnVideoRecord);
+    videoTopBar->addWidget(chkRealtimeMode);
+    videoTopBar->addStretch();
+    videoTabLayout->addLayout(videoTopBar);
+
+    lblVideoDisplay = new QLabel(tabVideo);
+    lblVideoDisplay->setAlignment(Qt::AlignCenter);
+    lblVideoDisplay->setStyleSheet("background-color: #1e272e; color: #808e9b; font-size: 15px; border: 1px solid #485460; border-radius: 8px; min-height: 380px;");
+    lblVideoDisplay->setText("Відеопотік не завантажено.\nОберіть відеофайл або запустіть веб-камеру.");
+    lblVideoDisplay->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    videoTabLayout->addWidget(lblVideoDisplay, 1);
+
+    QHBoxLayout* timelineLayout = new QHBoxLayout();
+    sliderVideoProgress = new QSlider(Qt::Horizontal, tabVideo);
+    sliderVideoProgress->setRange(0, 100);
+    sliderVideoProgress->setValue(0);
+    sliderVideoProgress->setEnabled(false);
+    lblVideoTime = new QLabel("0 / 0", tabVideo);
+    lblVideoTime->setFixedWidth(110);
+    lblVideoTime->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    timelineLayout->addWidget(sliderVideoProgress);
+    timelineLayout->addWidget(lblVideoTime);
+    videoTabLayout->addLayout(timelineLayout);
+
+    QHBoxLayout* videoControlsLayout = new QHBoxLayout();
+    btnVideoPlay = new QPushButton("Відтворити", tabVideo);
+    btnVideoPlay->setCursor(Qt::PointingHandCursor);
+    btnVideoPlay->setEnabled(false);
+    btnVideoPause = new QPushButton("Пауза", tabVideo);
+    btnVideoPause->setCursor(Qt::PointingHandCursor);
+    btnVideoPause->setEnabled(false);
+    btnVideoStop = new QPushButton("Зупинити", tabVideo);
+    btnVideoStop->setCursor(Qt::PointingHandCursor);
+    btnVideoStop->setEnabled(false);
+
+    videoControlsLayout->addWidget(btnVideoPlay);
+    videoControlsLayout->addWidget(btnVideoPause);
+    videoControlsLayout->addWidget(btnVideoStop);
+    videoControlsLayout->addSpacing(20);
+
+    lblVideoInfo = new QLabel("Джерело: Немає даних", tabVideo);
+    lblVideoInfo->setStyleSheet("font-weight: bold; color: #2c3e50;");
+    videoControlsLayout->addWidget(lblVideoInfo);
+
+    videoControlsLayout->addStretch();
+
+    lblVideoStats = new QLabel("Статус: Очікування | Швидкодія: 0.0 FPS | Час кадру: 0.0 мс", tabVideo);
+    lblVideoStats->setStyleSheet("font-weight: bold; color: #27ae60; font-size: 12px;");
+    videoControlsLayout->addWidget(lblVideoStats);
+
+    videoTabLayout->addLayout(videoControlsLayout);
+
+    tabWidget->addTab(tabVideo, "Обробка відеопотоку");
+
     QWidget* tabPerformance = new QWidget(tabWidget);
     QVBoxLayout* perfLayout = new QVBoxLayout(tabPerformance);
     perfLayout->setContentsMargins(15, 15, 15, 15);
@@ -231,15 +321,19 @@ void MainWindow::setupUI() {
     QFrame* cardTp = createTimeMetricCard("Час паралельної обробки (Tp)", "мс", lblMultiTimeVal, lblMultiFps);
     QFrame* cardS = createMetricCard("Коефіцієнт прискорення (S)", "x", lblSpeedupVal);
     QFrame* cardE = createMetricCard("Ефективність потоків (E)", "%", lblEfficiencyVal);
+    QFrame* cardMse = createMetricCard("Похибка (MSE)", "", lblMseVal);
     QFrame* cardPsnr = createMetricCard("Якість обробки (PSNR)", "дБ", lblPsnrVal);
     QFrame* cardSsim = createMetricCard("Метрика схожості (SSIM)", "", lblSsimVal);
+    QFrame* cardMethod = createMetricCard("Активний алгоритм", "", lblActiveAlgorithmVal);
 
     cardGrid->addWidget(cardT1, 0, 0);
     cardGrid->addWidget(cardTp, 0, 1);
     cardGrid->addWidget(cardS, 0, 2);
-    cardGrid->addWidget(cardE, 1, 0);
+    cardGrid->addWidget(cardE, 0, 3);
+    cardGrid->addWidget(cardMse, 1, 0);
     cardGrid->addWidget(cardPsnr, 1, 1);
     cardGrid->addWidget(cardSsim, 1, 2);
+    cardGrid->addWidget(cardMethod, 1, 3);
     
     perfLayout->addLayout(cardGrid);
 
@@ -284,11 +378,21 @@ void MainWindow::setupUI() {
     QLabel* lblBenchDesc = new QLabel("Порівняння конфігурацій (блоки, потоки) з еталонним інструментом OpenCV:", tabBenchmark);
     lblBenchDesc->setStyleSheet("font-weight: bold; font-size: 11px;");
     
+    btnExportCsv = new QPushButton("Експорт у CSV", tabBenchmark);
+    btnExportCsv->setCursor(Qt::PointingHandCursor);
+    btnExportCsv->setEnabled(false);
+
+    btnExportJson = new QPushButton("Експорт у JSON", tabBenchmark);
+    btnExportJson->setCursor(Qt::PointingHandCursor);
+    btnExportJson->setEnabled(false);
+
     btnRunBenchmark = new QPushButton("ЗАПУСТИТИ АВТОМАТИЧНИЙ БЕНЧМАРК", tabBenchmark);
     btnRunBenchmark->setCursor(Qt::PointingHandCursor);
     
     benchHeader->addWidget(lblBenchDesc);
     benchHeader->addStretch();
+    benchHeader->addWidget(btnExportCsv);
+    benchHeader->addWidget(btnExportJson);
     benchHeader->addWidget(btnRunBenchmark);
     benchLayout->addLayout(benchHeader);
     
@@ -297,10 +401,10 @@ void MainWindow::setupUI() {
     benchLayout->addWidget(lblTable1);
 
     tableBenchmark = new QTableWidget(tabBenchmark);
-    tableBenchmark->setColumnCount(7);
+    tableBenchmark->setColumnCount(8);
     tableBenchmark->setHorizontalHeaderLabels({
         "Метод масштабування", "Розмір блоку", "Потоки OpenMP", 
-        "Час обробки (мс)", "Швидкодія (FPS)", "Якість PSNR (дБ)", "Подібність SSIM"
+        "Час обробки (мс)", "Швидкодія (FPS)", "Похибка (MSE)", "Якість PSNR (дБ)", "Подібність SSIM"
     });
     tableBenchmark->setEditTriggers(QAbstractItemView::NoEditTriggers);
     tableBenchmark->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -330,6 +434,18 @@ void MainWindow::setupUI() {
     connect(btnProcess, &QPushButton::clicked, this, &MainWindow::onProcessClicked);
     connect(btnSave, &QPushButton::clicked, this, &MainWindow::onSaveImageClicked);
     connect(btnRunBenchmark, &QPushButton::clicked, this, &MainWindow::onRunBenchmarkClicked);
+    connect(btnExportCsv, &QPushButton::clicked, this, &MainWindow::onExportCsvClicked);
+    connect(btnExportJson, &QPushButton::clicked, this, &MainWindow::onExportJsonClicked);
+    connect(btnLoadVideo, &QPushButton::clicked, this, &MainWindow::onLoadVideoClicked);
+    connect(btnWebcam, &QPushButton::clicked, this, &MainWindow::onWebcamClicked);
+    connect(btnVideoPlay, &QPushButton::clicked, this, &MainWindow::onVideoPlayClicked);
+    connect(btnVideoPause, &QPushButton::clicked, this, &MainWindow::onVideoPauseClicked);
+    connect(btnVideoStop, &QPushButton::clicked, this, &MainWindow::onVideoStopClicked);
+    connect(btnVideoRecord, &QPushButton::clicked, this, &MainWindow::onVideoRecordClicked);
+    connect(sliderVideoProgress, &QSlider::sliderMoved, this, &MainWindow::onVideoSeekSliderMoved);
+    connect(chkRealtimeMode, &QCheckBox::toggled, this, [this](bool checked) {
+        if (videoProcessor) videoProcessor->setRealtimeMode(checked);
+    });
     connect(sliderThreads, &QSlider::valueChanged, this, &MainWindow::onThreadSliderChanged);
     connect(spinThreads, &QSpinBox::valueChanged, this, &MainWindow::onThreadSpinChanged);
     connect(comboScalingMode, &QComboBox::currentIndexChanged, this, &MainWindow::onScalingModeChanged);
@@ -346,6 +462,18 @@ void MainWindow::setupUI() {
     });
     connect(spinTargetWidth, qOverload<int>(&QSpinBox::valueChanged), this, &MainWindow::onTargetWidthChanged);
     connect(spinTargetHeight, qOverload<int>(&QSpinBox::valueChanged), this, &MainWindow::onTargetHeightChanged);
+    connect(comboAlgorithm, &QComboBox::currentIndexChanged, this, [this](int) {
+        syncVideoProcessorParams();
+    });
+    connect(comboBlockSize, &QComboBox::currentIndexChanged, this, [this](int) {
+        syncVideoProcessorParams();
+    });
+    connect(chkEnableSharpen, &QCheckBox::toggled, this, [this](bool) {
+        syncVideoProcessorParams();
+    });
+    connect(chkEnableOverlap, &QCheckBox::toggled, this, [this](bool) {
+        syncVideoProcessorParams();
+    });
 }
 
 /**
@@ -432,6 +560,7 @@ void MainWindow::onThreadSpinChanged(int value) {
     if (sliderThreads->value() != value) {
         sliderThreads->setValue(value);
     }
+    syncVideoProcessorParams();
 }
 
 /**
@@ -486,6 +615,44 @@ void MainWindow::onLoadImageClicked() {
 }
 
 /**
+ * @brief Повертає посилання на активний обчислювальний скалер відповідно до вибору в комбобоксі.
+ */
+IScaler& MainWindow::getActiveScaler() {
+    int index = comboAlgorithm->currentIndex();
+    bool sharpen = chkEnableSharpen->isChecked();
+    bool overlap = chkEnableOverlap->isChecked();
+
+    if (index == 1) {
+        bicubicScaler.setEnableSharpen(sharpen);
+        bicubicScaler.setEnableOverlap(overlap);
+        return bicubicScaler;
+    } else if (index == 2) {
+        lanczosScaler.setEnableSharpen(sharpen);
+        lanczosScaler.setEnableOverlap(overlap);
+        return lanczosScaler;
+    } else if (index == 3) {
+        adaptiveScaler.setEnableSharpen(sharpen);
+        adaptiveScaler.setEnableOverlap(overlap);
+        return adaptiveScaler;
+    }
+
+    bilinearScaler.setEnableSharpen(sharpen);
+    bilinearScaler.setEnableOverlap(overlap);
+    return bilinearScaler;
+}
+
+/**
+ * @brief Повертає коротку назву обраного алгоритму для звітів та графічного інтерфейсу.
+ */
+QString MainWindow::getActiveScalerName() const {
+    int index = comboAlgorithm->currentIndex();
+    if (index == 1) return "Bicubic 4x4";
+    if (index == 2) return "Lanczos-3 6x6";
+    if (index == 3) return "Adaptive Sobel";
+    return "Bilinear";
+}
+
+/**
  * @brief Виконує обробку (масштабування) зображення в послідовному та паралельному режимах.
  */
 void MainWindow::onProcessClicked() {
@@ -494,8 +661,7 @@ void MainWindow::onProcessClicked() {
         return;
     }
 
-    bilinearScaler.setEnableSharpen(chkEnableSharpen->isChecked());
-    bilinearScaler.setEnableOverlap(chkEnableOverlap->isChecked());
+    IScaler& scaler = getActiveScaler();
 
     double scaleX = 1.0;
     double scaleY = 1.0;
@@ -534,7 +700,7 @@ void MainWindow::onProcessClicked() {
 
     std::stringstream sLog;
     sLog << "=== ПОЧАТОК МАСШТАБУВАННЯ (" << originalImage.cols << "x" << originalImage.rows 
-         << " -> " << outWidth << "x" << outHeight << ") ===";
+         << " -> " << outWidth << "x" << outHeight << ") [" << getActiveScalerName().toStdString() << "] ===";
     metricsController.AddLog(sLog.str());
     metricsController.AddLog("Розбиття вихідної матриці на сітку блоків...");
     
@@ -548,7 +714,7 @@ void MainWindow::onProcessClicked() {
     QCoreApplication::processEvents();
 
     auto t1_start = std::chrono::high_resolution_clock::now();
-    ParallelEngine::ScaleImage(originalImage, singleResult, blocks, bilinearScaler, scaleX, scaleY, 1);
+    ParallelEngine::ScaleImage(originalImage, singleResult, blocks, scaler, scaleX, scaleY, 1);
     auto t1_end = std::chrono::high_resolution_clock::now();
     double t1_duration = std::chrono::duration<double, std::milli>(t1_end - t1_start).count();
 
@@ -594,7 +760,7 @@ void MainWindow::onProcessClicked() {
                 #pragma omp for
                 for (int j = 0; j < waveSize; ++j) {
                     int blockIdx = startIdx + j;
-                    bilinearScaler.ScaleBlock(originalImage, scaledImage, blocks[blockIdx], scaleX, scaleY);
+                    scaler.ScaleBlock(originalImage, scaledImage, blocks[blockIdx], scaleX, scaleY);
                     blockThreads[j] = tid;
                 }
             }
@@ -638,7 +804,7 @@ void MainWindow::onProcessClicked() {
         viewerScaled->setZoom(1.0);
     } else {
         auto tp_start = std::chrono::high_resolution_clock::now();
-        ParallelEngine::ScaleImage(originalImage, scaledImage, blocks, bilinearScaler, scaleX, scaleY, threads);
+        ParallelEngine::ScaleImage(originalImage, scaledImage, blocks, scaler, scaleX, scaleY, threads);
         auto tp_end = std::chrono::high_resolution_clock::now();
         tp_duration = std::chrono::duration<double, std::milli>(tp_end - tp_start).count();
         
@@ -660,6 +826,7 @@ void MainWindow::onProcessClicked() {
     if (!originalImage.empty() && !scaledImage.empty()) {
         cv::Mat scaledResized;
         cv::resize(scaledImage, scaledResized, originalImage.size(), 0, 0, cv::INTER_LINEAR);
+        metrics.mse = MetricsController::CalculateMSE(originalImage, scaledResized);
         metrics.psnr = MetricsController::CalculatePSNR(originalImage, scaledResized);
         metrics.ssim = MetricsController::CalculateSSIM(originalImage, scaledResized);
     }
@@ -729,8 +896,10 @@ void MainWindow::updateMetricsDisplay(const ScalingMetrics& metrics) {
         lblMultiFps->setStyleSheet("font-size: 12px; font-weight: bold; color: #c0392b;");
     }
 
+    lblMseVal->setText(QString::number(metrics.mse, 'f', 4));
     lblPsnrVal->setText(QString::number(metrics.psnr, 'f', 2));
     lblSsimVal->setText(QString::number(metrics.ssim, 'f', 4));
+    lblActiveAlgorithmVal->setText(getActiveScalerName());
 
     int singleVal = static_cast<int>(metrics.singleThreadedTimeMs);
     int multiVal = static_cast<int>(metrics.multiThreadedTimeMs);
@@ -883,16 +1052,16 @@ void MainWindow::onRunBenchmarkClicked() {
 
     QGuiApplication::setOverrideCursor(Qt::WaitCursor);
     btnRunBenchmark->setEnabled(false);
+    btnExportCsv->setEnabled(false);
+    btnExportJson->setEnabled(false);
     
     tableBenchmark->setRowCount(0);
     tablePivotBenchmark->setRowCount(0);
     tablePivotBenchmark->setColumnCount(0);
+    currentBenchmarkRecords.clear();
 
-    bool origSharpen = bilinearScaler.isSharpenEnabled();
-    bool origOverlap = bilinearScaler.isOverlapEnabled();
-    
-    bilinearScaler.setEnableSharpen(chkEnableSharpen->isChecked());
-    bilinearScaler.setEnableOverlap(chkEnableOverlap->isChecked());
+    IScaler& scaler = getActiveScaler();
+    QString methodName = getActiveScalerName();
 
     cv::Mat cvResult;
     auto cv_start = std::chrono::high_resolution_clock::now();
@@ -909,6 +1078,7 @@ void MainWindow::onRunBenchmarkClicked() {
     QTableWidgetItem* itemThreads = new QTableWidgetItem("Бібліотечні (Макс)");
     QTableWidgetItem* itemTime = new QTableWidgetItem(QString::number(cvDuration, 'f', 1));
     QTableWidgetItem* itemFps = new QTableWidgetItem(QString::number(cvFps, 'f', 1));
+    QTableWidgetItem* itemMse = new QTableWidgetItem("0.0000 (Еталон)");
     QTableWidgetItem* itemPsnr = new QTableWidgetItem("99.00 (Еталон)");
     QTableWidgetItem* itemSsim = new QTableWidgetItem("1.0000 (Еталон)");
 
@@ -917,15 +1087,27 @@ void MainWindow::onRunBenchmarkClicked() {
     tableBenchmark->setItem(rCv, 2, itemThreads);
     tableBenchmark->setItem(rCv, 3, itemTime);
     tableBenchmark->setItem(rCv, 4, itemFps);
-    tableBenchmark->setItem(rCv, 5, itemPsnr);
-    tableBenchmark->setItem(rCv, 6, itemSsim);
+    tableBenchmark->setItem(rCv, 5, itemMse);
+    tableBenchmark->setItem(rCv, 6, itemPsnr);
+    tableBenchmark->setItem(rCv, 7, itemSsim);
 
-    for (int col = 0; col < 7; ++col) {
+    for (int col = 0; col < 8; ++col) {
         tableBenchmark->item(rCv, col)->setBackground(QColor("#f1f2f6"));
         tableBenchmark->item(rCv, col)->setForeground(QColor("#2f3542"));
         tableBenchmark->item(rCv, col)->setTextAlignment(Qt::AlignCenter);
     }
     tableBenchmark->item(rCv, 0)->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+
+    BenchmarkRecord cvRecord;
+    cvRecord.method = "OpenCV cv::resize (Еталон)";
+    cvRecord.blockSize = "N/A";
+    cvRecord.threads = omp_get_max_threads();
+    cvRecord.durationMs = cvDuration;
+    cvRecord.fps = cvFps;
+    cvRecord.mse = 0.0;
+    cvRecord.psnr = 99.0;
+    cvRecord.ssim = 1.0;
+    currentBenchmarkRecords.push_back(cvRecord);
 
     std::vector<int> testBlockSizes = {16, 64, 256};
 
@@ -957,14 +1139,6 @@ void MainWindow::onRunBenchmarkClicked() {
     }
     tablePivotBenchmark->setVerticalHeaderLabels(vertHeaders);
 
-    struct BenchResult {
-        int rowIndex;
-        int tIndex;
-        int bIndex;
-        double duration;
-    };
-    std::vector<BenchResult> customResults;
-
     for (size_t b = 0; b < testBlockSizes.size(); ++b) {
         int blockSize = testBlockSizes[b];
         std::vector<cv::Rect> blocks = ParallelEngine::GenerateGrid(outWidth, outHeight, blockSize, blockSize);
@@ -974,16 +1148,18 @@ void MainWindow::onRunBenchmarkClicked() {
             cv::Mat tempResult = cv::Mat::zeros(outHeight, outWidth, originalImage.type());
 
             auto start = std::chrono::high_resolution_clock::now();
-            ParallelEngine::ScaleImage(originalImage, tempResult, blocks, bilinearScaler, scaleX, scaleY, threads);
+            ParallelEngine::ScaleImage(originalImage, tempResult, blocks, scaler, scaleX, scaleY, threads);
             auto end = std::chrono::high_resolution_clock::now();
             double duration = std::chrono::duration<double, std::milli>(end - start).count();
             double fps = (duration > 0.0) ? (1000.0 / duration) : 0.0;
 
+            double mse = 0.0;
             double psnr = 0.0;
             double ssim = 1.0;
             if (!originalImage.empty() && !tempResult.empty()) {
                 cv::Mat tempResized;
                 cv::resize(tempResult, tempResized, originalImage.size(), 0, 0, cv::INTER_LINEAR);
+                mse = MetricsController::CalculateMSE(originalImage, tempResized);
                 psnr = MetricsController::CalculatePSNR(originalImage, tempResized);
                 ssim = MetricsController::CalculateSSIM(originalImage, tempResized);
             }
@@ -991,11 +1167,12 @@ void MainWindow::onRunBenchmarkClicked() {
             int r = tableBenchmark->rowCount();
             tableBenchmark->insertRow(r);
 
-            QTableWidgetItem* itemM = new QTableWidgetItem("Bilinear method");
+            QTableWidgetItem* itemM = new QTableWidgetItem(methodName);
             QTableWidgetItem* itemB = new QTableWidgetItem(QString("%1 x %2").arg(blockSize).arg(blockSize));
             QTableWidgetItem* itemT = new QTableWidgetItem(QString::number(threads));
             QTableWidgetItem* itemTi = new QTableWidgetItem(QString::number(duration, 'f', 1));
             QTableWidgetItem* itemF = new QTableWidgetItem(QString::number(fps, 'f', 1));
+            QTableWidgetItem* itemMs = new QTableWidgetItem(QString::number(mse, 'f', 4));
             QTableWidgetItem* itemP = new QTableWidgetItem(QString::number(psnr, 'f', 2));
             QTableWidgetItem* itemS = new QTableWidgetItem(QString::number(ssim, 'f', 4));
 
@@ -1004,10 +1181,11 @@ void MainWindow::onRunBenchmarkClicked() {
             tableBenchmark->setItem(r, 2, itemT);
             tableBenchmark->setItem(r, 3, itemTi);
             tableBenchmark->setItem(r, 4, itemF);
-            tableBenchmark->setItem(r, 5, itemP);
-            tableBenchmark->setItem(r, 6, itemS);
+            tableBenchmark->setItem(r, 5, itemMs);
+            tableBenchmark->setItem(r, 6, itemP);
+            tableBenchmark->setItem(r, 7, itemS);
 
-            for (int col = 0; col < 7; ++col) {
+            for (int col = 0; col < 8; ++col) {
                 tableBenchmark->item(r, col)->setTextAlignment(Qt::AlignCenter);
             }
             tableBenchmark->item(r, 0)->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
@@ -1016,18 +1194,248 @@ void MainWindow::onRunBenchmarkClicked() {
             itemPivot->setTextAlignment(Qt::AlignCenter);
             tablePivotBenchmark->setItem(t, b, itemPivot);
 
-            customResults.push_back({r, static_cast<int>(t), static_cast<int>(b), duration});
+            BenchmarkRecord rec;
+            rec.method = methodName.toStdString();
+            rec.blockSize = std::to_string(blockSize) + "x" + std::to_string(blockSize);
+            rec.threads = threads;
+            rec.durationMs = duration;
+            rec.fps = fps;
+            rec.mse = mse;
+            rec.psnr = psnr;
+            rec.ssim = ssim;
+            currentBenchmarkRecords.push_back(rec);
             
             QCoreApplication::processEvents();
         }
     }
 
-    bilinearScaler.setEnableSharpen(origSharpen);
-    bilinearScaler.setEnableOverlap(origOverlap);
-
     QGuiApplication::restoreOverrideCursor();
     btnRunBenchmark->setEnabled(true);
+    btnExportCsv->setEnabled(!currentBenchmarkRecords.empty());
+    btnExportJson->setEnabled(!currentBenchmarkRecords.empty());
 
     QMessageBox::information(this, "Тестування завершено", 
         "Автоматичний порівняльний бенчмарк успішно виконано!");
+}
+
+/**
+ * @brief Експортує результати бенчмарку у файл формату CSV.
+ */
+void MainWindow::onExportCsvClicked() {
+    if (currentBenchmarkRecords.empty()) {
+        QMessageBox::warning(this, "Попередження", "Немає даних для експорту! Спочатку запустіть бенчмарк.");
+        return;
+    }
+
+    QString filePath = QFileDialog::getSaveFileName(this, 
+        "Експорт результатів бенчмарку у CSV", "benchmark_results.csv", "Файли CSV (*.csv)");
+    
+    if (filePath.isEmpty()) {
+        return;
+    }
+
+    if (MetricsController::ExportBenchmarkToCSV(filePath.toStdString(), currentBenchmarkRecords)) {
+        QMessageBox::information(this, "Експорт завершено", "Дані успішно експортовано у файл:\n" + filePath);
+    } else {
+        QMessageBox::critical(this, "Помилка", "Не вдалося записати файл CSV!");
+    }
+}
+
+/**
+ * @brief Експортує результати бенчмарку у файл формату JSON.
+ */
+void MainWindow::onExportJsonClicked() {
+    if (currentBenchmarkRecords.empty()) {
+        QMessageBox::warning(this, "Попередження", "Немає даних для експорту! Спочатку запустіть бенчмарк.");
+        return;
+    }
+
+    QString filePath = QFileDialog::getSaveFileName(this, 
+        "Експорт результатів бенчмарку у JSON", "benchmark_results.json", "Файли JSON (*.json)");
+    
+    if (filePath.isEmpty()) {
+        return;
+    }
+
+    if (MetricsController::ExportBenchmarkToJSON(filePath.toStdString(), currentBenchmarkRecords)) {
+        QMessageBox::information(this, "Експорт завершено", "Дані успішно експортовано у файл:\n" + filePath);
+    } else {
+        QMessageBox::critical(this, "Помилка", "Не вдалося записати файл JSON!");
+    }
+}
+
+/**
+ * @brief Синхронізує параметри обчислення (скалер, роздільну здатність, потоки, розмір блоку) з обробником відео.
+ */
+void MainWindow::syncVideoProcessorParams() {
+    if (!videoProcessor) return;
+    videoProcessor->setScaler(&getActiveScaler());
+    int mode = comboScalingMode->currentIndex();
+    if (mode == 0) {
+        double s = spinCustomScale->value();
+        videoProcessor->setScale(s, s);
+    } else {
+        videoProcessor->setTargetResolution(spinTargetWidth->value(), spinTargetHeight->value());
+    }
+    videoProcessor->setThreads(spinThreads->value());
+    int bs = comboBlockSize->itemData(comboBlockSize->currentIndex()).toInt();
+    videoProcessor->setBlockSize(bs);
+    videoProcessor->setRealtimeMode(chkRealtimeMode->isChecked());
+}
+
+/**
+ * @brief Завантажує відеофайл через діалогове вікно.
+ */
+void MainWindow::onLoadVideoClicked() {
+    QString filePath = QFileDialog::getOpenFileName(this, 
+        "Виберіть вхідний відеофайл", "", "Відео (*.mp4 *.avi *.mkv *.mov *.wmv)");
+    if (filePath.isEmpty()) return;
+
+    if (videoProcessor->openVideo(filePath)) {
+        btnVideoPlay->setEnabled(true);
+        btnVideoPause->setEnabled(false);
+        btnVideoStop->setEnabled(false);
+        sliderVideoProgress->setEnabled(true);
+        lblVideoDisplay->setText("Відео завантажено.\nНатисніть 'Відтворити' для початку масштабування.");
+    }
+}
+
+/**
+ * @brief Підключає веб-камеру за замовчуванням.
+ */
+void MainWindow::onWebcamClicked() {
+    if (videoProcessor->openCamera(0)) {
+        btnVideoPlay->setEnabled(true);
+        btnVideoPause->setEnabled(false);
+        btnVideoStop->setEnabled(false);
+        sliderVideoProgress->setEnabled(false);
+        lblVideoDisplay->setText("Веб-камеру підключено.\nНатисніть 'Відтворити' для запуску трансляції.");
+    }
+}
+
+/**
+ * @brief Запускає відтворення / покадрову обробку відеопотоку.
+ */
+void MainWindow::onVideoPlayClicked() {
+    syncVideoProcessorParams();
+    videoProcessor->play();
+    btnVideoPlay->setEnabled(false);
+    btnVideoPause->setEnabled(true);
+    btnVideoStop->setEnabled(true);
+}
+
+/**
+ * @brief Призупиняє відтворення відеопотоку.
+ */
+void MainWindow::onVideoPauseClicked() {
+    videoProcessor->pause();
+    btnVideoPlay->setEnabled(true);
+    btnVideoPause->setEnabled(false);
+}
+
+/**
+ * @brief Зупиняє відтворення відеопотоку та скидає прогрес.
+ */
+void MainWindow::onVideoStopClicked() {
+    videoProcessor->stop();
+    btnVideoPlay->setEnabled(true);
+    btnVideoPause->setEnabled(false);
+    btnVideoStop->setEnabled(false);
+    sliderVideoProgress->setValue(0);
+}
+
+/**
+ * @brief Вмикає або вимикає збереження масштабованого відеопотоку у файл.
+ */
+void MainWindow::onVideoRecordClicked() {
+    if (isRecordingVideo) {
+        isRecordingVideo = false;
+        videoProcessor->setSaveOutput(false);
+        btnVideoRecord->setText("Запис у файл...");
+        btnVideoRecord->setStyleSheet("");
+        QMessageBox::information(this, "Запис зупинено", "Запис відео успішно збережено у файл:\n" + outputVideoPath);
+    } else {
+        QString savePath = QFileDialog::getSaveFileName(this, 
+            "Оберіть файл для збереження відео", "scaled_video.mp4", "MP4 Video (*.mp4);;AVI Video (*.avi)");
+        if (savePath.isEmpty()) return;
+
+        outputVideoPath = savePath;
+        isRecordingVideo = true;
+        videoProcessor->setSaveOutput(true, outputVideoPath);
+        btnVideoRecord->setText("● Зупинити запис");
+        btnVideoRecord->setStyleSheet("background-color: #e74c3c; color: white; font-weight: bold;");
+    }
+}
+
+/**
+ * @brief Обробляє переміщення повзунка таймлайну користувачем.
+ */
+void MainWindow::onVideoSeekSliderMoved(int position) {
+    if (videoProcessor) {
+        videoProcessor->seek(position);
+    }
+}
+
+/**
+ * @brief Оновлює інформацію про завантажене відео при отриманні метаданих.
+ */
+void MainWindow::onVideoLoaded(int width, int height, double fps, int totalFrames) {
+    lblVideoInfo->setText(QString("Джерело: %1x%2 @ %3 FPS [%4 кадрів]")
+        .arg(width).arg(height).arg(fps, 0, 'f', 1).arg(totalFrames));
+    sliderVideoProgress->setRange(0, totalFrames);
+    sliderVideoProgress->setValue(0);
+    lblVideoTime->setText(QString("0 / %1").arg(totalFrames));
+}
+
+/**
+ * @brief Приймає оброблений кадр з фонового потоку та виводить на екран із масштабуванням під розмір вікна.
+ */
+void MainWindow::onVideoFrameProcessed(const QImage& frame, double frameMs, double fps, int currentFrame, int totalFrames) {
+    if (frame.isNull()) return;
+
+    QPixmap pix = QPixmap::fromImage(frame);
+    QSize dispSize = lblVideoDisplay->size();
+    if (dispSize.width() > 10 && dispSize.height() > 10) {
+        pix = pix.scaled(dispSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    lblVideoDisplay->setPixmap(pix);
+
+    if (totalFrames > 0) {
+        sliderVideoProgress->blockSignals(true);
+        sliderVideoProgress->setValue(currentFrame);
+        sliderVideoProgress->blockSignals(false);
+        lblVideoTime->setText(QString("%1 / %2").arg(currentFrame).arg(totalFrames));
+    } else {
+        lblVideoTime->setText(QString("Кадр %1").arg(currentFrame));
+    }
+
+    lblVideoStats->setText(QString("Швидкодія: %1 FPS | Час кадру: %2 мс | Алгоритм: %3 [%4 потоків]")
+        .arg(fps, 0, 'f', 1)
+        .arg(frameMs, 0, 'f', 1)
+        .arg(getActiveScalerName())
+        .arg(spinThreads->value()));
+}
+
+/**
+ * @brief Обробляє завершення відтворення відеофайлу.
+ */
+void MainWindow::onVideoPlaybackFinished() {
+    btnVideoPlay->setEnabled(true);
+    btnVideoPause->setEnabled(false);
+    btnVideoStop->setEnabled(false);
+    lblVideoStats->setText("Відтворення / обробку завершено.");
+}
+
+/**
+ * @brief Виводить текстовий статус відеопроцесора.
+ */
+void MainWindow::onVideoStatusChanged(const QString& status) {
+    lblVideoStats->setText(status);
+}
+
+/**
+ * @brief Виводить повідомлення про помилку у модальному вікні.
+ */
+void MainWindow::onVideoErrorOccurred(const QString& error) {
+    QMessageBox::critical(this, "Помилка відео", error);
 }

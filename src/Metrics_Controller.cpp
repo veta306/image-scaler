@@ -1,4 +1,5 @@
 #include "Metrics_Controller.hpp"
+#include <fstream>
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
@@ -46,6 +47,27 @@ ScalingMetrics MetricsController::CalculateMetrics(double singleTimeMs, double m
     }
 
     return metrics;
+}
+
+/**
+ * @brief Обчислює середньоквадратичну помилку (MSE) між двома зображеннями.
+ */
+double MetricsController::CalculateMSE(const cv::Mat& img1, const cv::Mat& img2) {
+    if (img1.empty() || img2.empty() || img1.size() != img2.size()) {
+        return 0.0;
+    }
+
+    cv::Mat diff;
+    cv::absdiff(img1, img2, diff);
+    diff.convertTo(diff, CV_64F);
+    diff = diff.mul(diff);
+
+    cv::Scalar s = cv::sum(diff);
+    double totalSse = 0.0;
+    for (int i = 0; i < img1.channels(); ++i) {
+        totalSse += s[i];
+    }
+    return totalSse / (static_cast<double>(img1.total()) * img1.channels());
 }
 
 /**
@@ -119,4 +141,64 @@ double MetricsController::CalculateSSIM(const cv::Mat& img1, const cv::Mat& img2
         return (mssim[0] + mssim[1] + mssim[2] + mssim[3]) / 4.0;
     }
     return mssim[0];
+}
+
+/**
+ * @brief Експортує дані бенчмарку у файл формату CSV.
+ */
+bool MetricsController::ExportBenchmarkToCSV(const std::string& filePath, const std::vector<BenchmarkRecord>& records) {
+    std::ofstream file(filePath);
+    if (!file.is_open()) {
+        return false;
+    }
+
+    file << "Method,BlockSize,Threads,DurationMs,FPS,MSE,PSNR,SSIM\n";
+    file << std::fixed << std::setprecision(4);
+
+    for (const auto& rec : records) {
+        // Заміна можливих ком у назві методу
+        std::string safeMethod = rec.method;
+        std::replace(safeMethod.begin(), safeMethod.end(), ',', ' ');
+
+        file << "\"" << safeMethod << "\","
+             << "\"" << rec.blockSize << "\","
+             << rec.threads << ","
+             << std::setprecision(2) << rec.durationMs << ","
+             << std::setprecision(2) << rec.fps << ","
+             << std::setprecision(4) << rec.mse << ","
+             << std::setprecision(2) << rec.psnr << ","
+             << std::setprecision(4) << rec.ssim << "\n";
+    }
+
+    file.close();
+    return true;
+}
+
+/**
+ * @brief Експортує дані бенчмарку у файл формату JSON.
+ */
+bool MetricsController::ExportBenchmarkToJSON(const std::string& filePath, const std::vector<BenchmarkRecord>& records) {
+    std::ofstream file(filePath);
+    if (!file.is_open()) {
+        return false;
+    }
+
+    file << "[\n";
+    for (size_t i = 0; i < records.size(); ++i) {
+        const auto& rec = records[i];
+        file << "  {\n";
+        file << "    \"method\": \"" << rec.method << "\",\n";
+        file << "    \"blockSize\": \"" << rec.blockSize << "\",\n";
+        file << "    \"threads\": " << rec.threads << ",\n";
+        file << "    \"durationMs\": " << std::fixed << std::setprecision(2) << rec.durationMs << ",\n";
+        file << "    \"fps\": " << std::fixed << std::setprecision(2) << rec.fps << ",\n";
+        file << "    \"mse\": " << std::fixed << std::setprecision(4) << rec.mse << ",\n";
+        file << "    \"psnr\": " << std::fixed << std::setprecision(2) << rec.psnr << ",\n";
+        file << "    \"ssim\": " << std::fixed << std::setprecision(4) << rec.ssim << "\n";
+        file << "  }" << (i + 1 < records.size() ? ",\n" : "\n");
+    }
+    file << "]\n";
+
+    file.close();
+    return true;
 }

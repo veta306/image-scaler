@@ -18,8 +18,23 @@ struct ScalingMetrics {
     int blockSizeY = 64;
     int imageWidth = 0;
     int imageHeight = 0;
+    double mse = 0.0;
     double psnr = 0.0;
     double ssim = 1.0;
+};
+
+/**
+ * @brief Запис результату одного експерименту бенчмарку для експорту в CSV та JSON.
+ */
+struct BenchmarkRecord {
+    std::string method;
+    std::string blockSize;
+    int threads = 1;
+    double durationMs = 0.0;
+    double fps = 0.0;
+    double mse = 0.0;
+    double psnr = 0.0;
+    double ssim = 0.0;
 };
 
 /**
@@ -51,6 +66,11 @@ public:
     static ScalingMetrics CalculateMetrics(double singleTimeMs, double multiTimeMs, int threads);
 
     /**
+     * @brief Обчислює середньоквадратичну помилку (MSE) між двома зображеннями.
+     */
+    static double CalculateMSE(const cv::Mat& img1, const cv::Mat& img2);
+
+    /**
      * @brief Обчислює метрику якості PSNR між двома зображеннями.
      */
     static double CalculatePSNR(const cv::Mat& img1, const cv::Mat& img2);
@@ -59,6 +79,16 @@ public:
      * @brief Обчислює індекс структурної подібності SSIM між двома зображеннями.
      */
     static double CalculateSSIM(const cv::Mat& img1, const cv::Mat& img2);
+
+    /**
+     * @brief Експортує дані бенчмарку у файл формату CSV.
+     */
+    static bool ExportBenchmarkToCSV(const std::string& filePath, const std::vector<BenchmarkRecord>& records);
+
+    /**
+     * @brief Експортує дані бенчмарку у файл формату JSON.
+     */
+    static bool ExportBenchmarkToJSON(const std::string& filePath, const std::vector<BenchmarkRecord>& records);
 };
 
 #endif // METRICS_CONTROLLER_HPP

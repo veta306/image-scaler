@@ -13,13 +13,17 @@
 #include <QScrollArea>
 #include <QTabWidget>
 #include <QString>
-#include <opencv2/opencv.hpp>
-
 #include <QCheckBox>
 #include <QTableWidget>
+#include <vector>
+#include <opencv2/opencv.hpp>
 
 #include "Metrics_Controller.hpp"
 #include "BilinearScaler.hpp"
+#include "BicubicScaler.hpp"
+#include "LanczosScaler.hpp"
+#include "AdaptiveScaler.hpp"
+#include "VideoProcessor.hpp"
 #include "IO_Manager.hpp"
 #include "Parallel_Engine.hpp"
 #include "ImageViewer.hpp"
@@ -29,7 +33,7 @@ class MainWindow : public QMainWindow {
 
 public:
     MainWindow(QWidget* parent = nullptr);
-    ~MainWindow() = default;
+    ~MainWindow() override;
 
 private slots:
     void onLoadImageClicked();
@@ -41,6 +45,22 @@ private slots:
     void onTargetWidthChanged(int value);
     void onTargetHeightChanged(int value);
     void onRunBenchmarkClicked();
+    void onExportCsvClicked();
+    void onExportJsonClicked();
+
+    // Video slots
+    void onLoadVideoClicked();
+    void onWebcamClicked();
+    void onVideoPlayClicked();
+    void onVideoPauseClicked();
+    void onVideoStopClicked();
+    void onVideoRecordClicked();
+    void onVideoSeekSliderMoved(int position);
+    void onVideoFrameProcessed(const QImage& frame, double frameMs, double fps, int currentFrame, int totalFrames);
+    void onVideoLoaded(int width, int height, double fps, int totalFrames);
+    void onVideoPlaybackFinished();
+    void onVideoStatusChanged(const QString& status);
+    void onVideoErrorOccurred(const QString& error);
 
 private:
     void setupUI();
@@ -50,12 +70,21 @@ private:
     QFrame* createMetricCard(const QString& title, const QString& unit, QLabel*& valueLabelOut);
     QFrame* createTimeMetricCard(const QString& title, const QString& unit, QLabel*& valueLabelOut, QLabel*& fpsLabelOut);
     void updateTargetResolutionFromScale();
+    IScaler& getActiveScaler();
+    QString getActiveScalerName() const;
+    void syncVideoProcessorParams();
 
     cv::Mat originalImage;
     cv::Mat scaledImage;
     QString currentFilePath;
     MetricsController metricsController;
+
     BilinearScaler bilinearScaler;
+    BicubicScaler bicubicScaler;
+    LanczosScaler lanczosScaler;
+    AdaptiveScaler adaptiveScaler;
+
+    std::vector<BenchmarkRecord> currentBenchmarkRecords;
 
     ImageViewer* viewerOrig;
     ImageViewer* viewerScaled;
@@ -87,8 +116,10 @@ private:
     QLabel* lblEfficiencyVal;
     QLabel* lblSingleFps;
     QLabel* lblMultiFps;
+    QLabel* lblMseVal;
     QLabel* lblPsnrVal;
     QLabel* lblSsimVal;
+    QLabel* lblActiveAlgorithmVal;
 
     // Performance Bars
     QProgressBar* barSingleTime;
@@ -96,8 +127,27 @@ private:
 
     // Benchmark tab widgets
     QPushButton* btnRunBenchmark;
+    QPushButton* btnExportCsv;
+    QPushButton* btnExportJson;
     QTableWidget* tableBenchmark;
     QTableWidget* tablePivotBenchmark;
+
+    // Video processor & widgets
+    VideoProcessor* videoProcessor{nullptr};
+    QLabel* lblVideoDisplay;
+    QLabel* lblVideoInfo;
+    QLabel* lblVideoStats;
+    QPushButton* btnLoadVideo;
+    QPushButton* btnWebcam;
+    QPushButton* btnVideoPlay;
+    QPushButton* btnVideoPause;
+    QPushButton* btnVideoStop;
+    QPushButton* btnVideoRecord;
+    QSlider* sliderVideoProgress;
+    QCheckBox* chkRealtimeMode;
+    QLabel* lblVideoTime;
+    QString outputVideoPath;
+    bool isRecordingVideo = false;
 };
 
 #endif // MAINWINDOW_HPP
