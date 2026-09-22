@@ -2,8 +2,51 @@
 #include <algorithm>
 #include <cmath>
 
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
+
+namespace {
 /**
- * @brief Виконує масштабування прямокутного блоку зображення методом Lanczos-3.
+ * @brief Високоточна таблиця пошуку (Lookup Table, LUT) значень функції Ланцоша Lanczos-3
+ * із субпіксельною лінійною інтерполяцією для усунення важких викликів тригонометричних функцій sin().
+ */
+struct LanczosLUT {
+    static constexpr int TABLE_SIZE = 2048;
+    static constexpr double MAX_X = 3.0;
+    float table[TABLE_SIZE + 2];
+
+    LanczosLUT() {
+        constexpr double pi = 3.14159265358979323846;
+        for (int i = 0; i <= TABLE_SIZE; ++i) {
+            double x = (static_cast<double>(i) / TABLE_SIZE) * MAX_X;
+            if (x < 1e-7) {
+                table[i] = 1.0f;
+            } else if (x >= 3.0) {
+                table[i] = 0.0f;
+            } else {
+                double pix = pi * x;
+                table[i] = static_cast<float>((3.0 * std::sin(pix) * std::sin(pix / 3.0)) / (pix * pix));
+            }
+        }
+        table[TABLE_SIZE + 1] = 0.0f;
+    }
+
+    inline float get(double x) const {
+        x = std::abs(x);
+        if (x >= MAX_X) return 0.0f;
+        double pos = x * (TABLE_SIZE / MAX_X);
+        int idx = static_cast<int>(pos);
+        float frac = static_cast<float>(pos - idx);
+        return table[idx] * (1.0f - frac) + table[idx + 1] * frac;
+    }
+};
+
+static const LanczosLUT g_lanczosLUT;
+}
+
+/**
+ * @brief Виконує масштабування прямокутного блоку зображення методом Lanczos-3 із підтримкою SIMD AVX2 та FMA.
  */
 void LanczosScaler::ScaleBlock(const cv::Mat& input, cv::Mat& output, const cv::Rect& blockRect, double scaleX, double scaleY) {
     if (input.empty() || output.empty()) {
@@ -35,25 +78,176 @@ void LanczosScaler::ScaleBlock(const cv::Mat& input, cv::Mat& output, const cv::
         const double y_in = (y_global + 0.5) / scaleY - 0.5;
         const int y0 = static_cast<int>(std::floor(y_in));
 
-        double wy[6];
-        double sumWy = 0.0;
+        float wy[6];
+        float sumWy = 0.0f;
         int clampedY[6];
 
         for (int k = 0; k < 6; ++k) {
             const int sampleY = y0 - 2 + k;
-            wy[k] = lanczosWeight(sampleY - y_in);
+            wy[k] = g_lanczosLUT.get(sampleY - y_in);
             sumWy += wy[k];
             clampedY[k] = std::max(0, std::min(inRows - 1, sampleY));
         }
 
-        if (std::abs(sumWy) > 1e-6) {
-            const double invSum = 1.0 / sumWy;
+        if (std::abs(sumWy) > 1e-6f) {
+            const float invSum = 1.0f / sumWy;
             for (int k = 0; k < 6; ++k) {
                 wy[k] *= invSum;
             }
         }
 
-        for (int x_local = 0; x_local < tempW; ++x_local) {
+        int x_local = 0;
+
+#if defined(__AVX2__)
+        if (m_enableSIMD) {
+            const __m256 v_zero = _mm256_setzero_ps();
+            const __m256 v_255 = _mm256_set1_ps(255.0f);
+
+            if (channels == 3) {
+                const cv::Vec3b* rPtr[6] = {
+                    input.ptr<cv::Vec3b>(clampedY[0]),
+                    input.ptr<cv::Vec3b>(clampedY[1]),
+                    input.ptr<cv::Vec3b>(clampedY[2]),
+                    input.ptr<cv::Vec3b>(clampedY[3]),
+                    input.ptr<cv::Vec3b>(clampedY[4]),
+                    input.ptr<cv::Vec3b>(clampedY[5])
+                };
+                cv::Vec3b* outRow = tempBlock.ptr<cv::Vec3b>(y_local);
+
+                for (; x_local <= tempW - 8; x_local += 8) {
+                    alignas(32) float c_b[6][8];
+                    alignas(32) float c_g[6][8];
+                    alignas(32) float c_r[6][8];
+                    alignas(32) float w_arr[6][8];
+
+                    for (int k = 0; k < 8; ++k) {
+                        const int x_global = x_start + x_local + k;
+                        const double x_in = (x_global + 0.5) / scaleX - 0.5;
+                        const int x0 = static_cast<int>(std::floor(x_in));
+
+                        float wx[6];
+                        float sumWx = 0.0f;
+                        int clampedX[6];
+
+                        for (int i = 0; i < 6; ++i) {
+                            const int sampleX = x0 - 2 + i;
+                            wx[i] = g_lanczosLUT.get(sampleX - x_in);
+                            sumWx += wx[i];
+                            clampedX[i] = std::max(0, std::min(inCols - 1, sampleX));
+                        }
+
+                        if (std::abs(sumWx) > 1e-6f) {
+                            const float inv = 1.0f / sumWx;
+                            for (int i = 0; i < 6; ++i) wx[i] *= inv;
+                        }
+
+                        for (int i = 0; i < 6; ++i) {
+                            w_arr[i][k] = wx[i];
+                            const int cx = clampedX[i];
+                            float colB = wy[0] * rPtr[0][cx][0] + wy[1] * rPtr[1][cx][0] + wy[2] * rPtr[2][cx][0]
+                                       + wy[3] * rPtr[3][cx][0] + wy[4] * rPtr[4][cx][0] + wy[5] * rPtr[5][cx][0];
+                            float colG = wy[0] * rPtr[0][cx][1] + wy[1] * rPtr[1][cx][1] + wy[2] * rPtr[2][cx][1]
+                                       + wy[3] * rPtr[3][cx][1] + wy[4] * rPtr[4][cx][1] + wy[5] * rPtr[5][cx][1];
+                            float colR = wy[0] * rPtr[0][cx][2] + wy[1] * rPtr[1][cx][2] + wy[2] * rPtr[2][cx][2]
+                                       + wy[3] * rPtr[3][cx][2] + wy[4] * rPtr[4][cx][2] + wy[5] * rPtr[5][cx][2];
+                            c_b[i][k] = colB;
+                            c_g[i][k] = colG;
+                            c_r[i][k] = colR;
+                        }
+                    }
+
+                    __m256 vb = _mm256_mul_ps(_mm256_load_ps(w_arr[0]), _mm256_load_ps(c_b[0]));
+                    __m256 vg = _mm256_mul_ps(_mm256_load_ps(w_arr[0]), _mm256_load_ps(c_g[0]));
+                    __m256 vr = _mm256_mul_ps(_mm256_load_ps(w_arr[0]), _mm256_load_ps(c_r[0]));
+
+                    for (int i = 1; i < 6; ++i) {
+                        __m256 wi = _mm256_load_ps(w_arr[i]);
+                        vb = _mm256_fmadd_ps(wi, _mm256_load_ps(c_b[i]), vb);
+                        vg = _mm256_fmadd_ps(wi, _mm256_load_ps(c_g[i]), vg);
+                        vr = _mm256_fmadd_ps(wi, _mm256_load_ps(c_r[i]), vr);
+                    }
+
+                    vb = _mm256_max_ps(v_zero, _mm256_min_ps(v_255, vb));
+                    vg = _mm256_max_ps(v_zero, _mm256_min_ps(v_255, vg));
+                    vr = _mm256_max_ps(v_zero, _mm256_min_ps(v_255, vr));
+
+                    alignas(32) float outB[8], outG[8], outR[8];
+                    _mm256_store_ps(outB, vb);
+                    _mm256_store_ps(outG, vg);
+                    _mm256_store_ps(outR, vr);
+
+                    for (int k = 0; k < 8; ++k) {
+                        outRow[x_local + k] = cv::Vec3b(
+                            static_cast<uchar>(outB[k] + 0.5f),
+                            static_cast<uchar>(outG[k] + 0.5f),
+                            static_cast<uchar>(outR[k] + 0.5f)
+                        );
+                    }
+                }
+            } else if (channels == 1) {
+                const uchar* rPtr[6] = {
+                    input.ptr<uchar>(clampedY[0]),
+                    input.ptr<uchar>(clampedY[1]),
+                    input.ptr<uchar>(clampedY[2]),
+                    input.ptr<uchar>(clampedY[3]),
+                    input.ptr<uchar>(clampedY[4]),
+                    input.ptr<uchar>(clampedY[5])
+                };
+                uchar* outRow = tempBlock.ptr<uchar>(y_local);
+
+                for (; x_local <= tempW - 8; x_local += 8) {
+                    alignas(32) float c_val[6][8];
+                    alignas(32) float w_arr[6][8];
+
+                    for (int k = 0; k < 8; ++k) {
+                        const int x_global = x_start + x_local + k;
+                        const double x_in = (x_global + 0.5) / scaleX - 0.5;
+                        const int x0 = static_cast<int>(std::floor(x_in));
+
+                        float wx[6];
+                        float sumWx = 0.0f;
+                        int clampedX[6];
+
+                        for (int i = 0; i < 6; ++i) {
+                            const int sampleX = x0 - 2 + i;
+                            wx[i] = g_lanczosLUT.get(sampleX - x_in);
+                            sumWx += wx[i];
+                            clampedX[i] = std::max(0, std::min(inCols - 1, sampleX));
+                        }
+
+                        if (std::abs(sumWx) > 1e-6f) {
+                            const float inv = 1.0f / sumWx;
+                            for (int i = 0; i < 6; ++i) wx[i] *= inv;
+                        }
+
+                        for (int i = 0; i < 6; ++i) {
+                            w_arr[i][k] = wx[i];
+                            const int cx = clampedX[i];
+                            float colVal = wy[0] * rPtr[0][cx] + wy[1] * rPtr[1][cx] + wy[2] * rPtr[2][cx]
+                                         + wy[3] * rPtr[3][cx] + wy[4] * rPtr[4][cx] + wy[5] * rPtr[5][cx];
+                            c_val[i][k] = colVal;
+                        }
+                    }
+
+                    __m256 v_val = _mm256_mul_ps(_mm256_load_ps(w_arr[0]), _mm256_load_ps(c_val[0]));
+                    for (int i = 1; i < 6; ++i) {
+                        v_val = _mm256_fmadd_ps(_mm256_load_ps(w_arr[i]), _mm256_load_ps(c_val[i]), v_val);
+                    }
+                    v_val = _mm256_max_ps(v_zero, _mm256_min_ps(v_255, v_val));
+
+                    alignas(32) float outVal[8];
+                    _mm256_store_ps(outVal, v_val);
+
+                    for (int k = 0; k < 8; ++k) {
+                        outRow[x_local + k] = static_cast<uchar>(outVal[k] + 0.5f);
+                    }
+                }
+            }
+        }
+#endif
+
+        // Скалярна обробка залишку або коли SIMD вимкнено
+        for (; x_local < tempW; ++x_local) {
             const int x_global = x_start + x_local;
             const double x_in = (x_global + 0.5) / scaleX - 0.5;
             const int x0 = static_cast<int>(std::floor(x_in));

@@ -24,7 +24,7 @@
  * @brief Конструктор головного вікна MainWindow.
  */
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
-    setWindowTitle("Паралельний масштабувальник зображень - Курсова робота");
+    setWindowTitle("Parallel Image Scaler");
     resize(1200, 800);
     
     videoProcessor = new VideoProcessor(this);
@@ -60,17 +60,17 @@ void MainWindow::setupUI() {
     
     QHBoxLayout* mainLayout = new QHBoxLayout(centralWidget);
     mainLayout->setContentsMargins(10, 10, 10, 10);
-    mainLayout->setSpacing(12);
+    mainLayout->setSpacing(6);
 
-    QFrame* sidebar = new QFrame(this);
-    sidebar->setObjectName("sidebar");
-    sidebar->setFixedWidth(310);
+    sidebarFrame = new QFrame(this);
+    sidebarFrame->setObjectName("sidebar");
+    sidebarFrame->setFixedWidth(310);
     
-    QVBoxLayout* sidebarLayout = new QVBoxLayout(sidebar);
+    QVBoxLayout* sidebarLayout = new QVBoxLayout(sidebarFrame);
     sidebarLayout->setContentsMargins(10, 10, 10, 10);
     sidebarLayout->setSpacing(15);
 
-    QGroupBox* fileGroup = new QGroupBox("Вхідні дані", sidebar);
+    QGroupBox* fileGroup = new QGroupBox("Вхідні дані", sidebarFrame);
     QVBoxLayout* fileLayout = new QVBoxLayout(fileGroup);
     
     btnLoad = new QPushButton("Завантажити зображення", fileGroup);
@@ -82,15 +82,15 @@ void MainWindow::setupUI() {
     fileLayout->addWidget(lblImageInfo);
     sidebarLayout->addWidget(fileGroup);
 
-    QGroupBox* scaleGroup = new QGroupBox("Параметри масштабу", sidebar);
+    QGroupBox* scaleGroup = new QGroupBox("Параметри масштабу", sidebarFrame);
     QFormLayout* scaleForm = new QFormLayout(scaleGroup);
     scaleForm->setLabelAlignment(Qt::AlignLeft);
     
     comboAlgorithm = new QComboBox(scaleGroup);
-    comboAlgorithm->addItem("Білінійна інтерполяція (Bilinear)", 0);
-    comboAlgorithm->addItem("Бікубічна інтерполяція (Bicubic 4x4)", 1);
-    comboAlgorithm->addItem("Інтерполяція Ланцоша (Lanczos-3 6x6)", 2);
-    comboAlgorithm->addItem("Адаптивна градієнтна (Adaptive Sobel)", 3);
+    comboAlgorithm->addItem("Білінійна інтерполяція", 0);
+    comboAlgorithm->addItem("Бікубічна інтерполяція", 1);
+    comboAlgorithm->addItem("Інтерполяція Ланцоша", 2);
+    comboAlgorithm->addItem("Адаптивна градієнтна інтерполяція", 3);
     
     comboScalingMode = new QComboBox(scaleGroup);
     comboScalingMode->addItem("За коефіцієнтом", 0);
@@ -136,7 +136,7 @@ void MainWindow::setupUI() {
     
     sidebarLayout->addWidget(scaleGroup);
 
-    QGroupBox* parallelGroup = new QGroupBox("Паралельність та блоки", sidebar);
+    QGroupBox* parallelGroup = new QGroupBox("Паралельність та блоки", sidebarFrame);
     QFormLayout* parallelForm = new QFormLayout(parallelGroup);
     parallelForm->setLabelAlignment(Qt::AlignLeft);
     
@@ -161,44 +161,67 @@ void MainWindow::setupUI() {
     threadLayout->addWidget(sliderThreads);
     threadLayout->addWidget(spinThreads);
 
-    parallelForm->addRow("Розмір блоку (px):", comboBlockSize);
+    parallelForm->addRow("Розмір блоку, пікселів:", comboBlockSize);
     parallelForm->addRow("Кількість потоків:", threadLayout);
     
     sidebarLayout->addWidget(parallelGroup);
 
-    QGroupBox* filterGroup = new QGroupBox("Покращення та візуалізація", sidebar);
+    QGroupBox* filterGroup = new QGroupBox("Покращення та візуалізація", sidebarFrame);
     QVBoxLayout* filterLayout = new QVBoxLayout(filterGroup);
     
-    chkEnableSharpen = new QCheckBox("Фільтр різкості (Unsharp Mask)", filterGroup);
+    chkEnableSharpen = new QCheckBox("Фільтр підвищення різкості", filterGroup);
     chkEnableSharpen->setChecked(false);
     
-    chkEnableOverlap = new QCheckBox("Усунення швів (Overlap Padding)", filterGroup);
+    chkEnableOverlap = new QCheckBox("Усунення межових швів блоків", filterGroup);
     chkEnableOverlap->setChecked(true);
     
-    chkEnableDemo = new QCheckBox("Демонстраційний режим (візуалізація)", filterGroup);
+    chkEnableSIMD = new QCheckBox("Апаратна векторизація AVX2", filterGroup);
+    chkEnableSIMD->setChecked(true);
+    
+    chkEnableDemo = new QCheckBox("Візуалізація черги блоків", filterGroup);
     chkEnableDemo->setChecked(false);
 
     filterLayout->addWidget(chkEnableSharpen);
     filterLayout->addWidget(chkEnableOverlap);
+    filterLayout->addWidget(chkEnableSIMD);
     filterLayout->addWidget(chkEnableDemo);
     
     sidebarLayout->addWidget(filterGroup);
     
     sidebarLayout->addStretch();
     
-    btnProcess = new QPushButton("ОБРОБИТИ ЗОБРАЖЕННЯ", sidebar);
+    btnProcess = new QPushButton("ОБРОБИТИ ЗОБРАЖЕННЯ", sidebarFrame);
     btnProcess->setObjectName("btnProcess");
     btnProcess->setEnabled(false);
     btnProcess->setCursor(Qt::PointingHandCursor);
     
-    btnSave = new QPushButton("Зберегти результат", sidebar);
+    btnSave = new QPushButton("Зберегти результат", sidebarFrame);
     btnSave->setEnabled(false);
     btnSave->setCursor(Qt::PointingHandCursor);
     
     sidebarLayout->addWidget(btnProcess);
     sidebarLayout->addWidget(btnSave);
 
-    mainLayout->addWidget(sidebar);
+    mainLayout->addWidget(sidebarFrame);
+
+    btnToggleSidebar = new QPushButton("◀", centralWidget);
+    btnToggleSidebar->setFixedWidth(18);
+    btnToggleSidebar->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+    btnToggleSidebar->setCursor(Qt::PointingHandCursor);
+    btnToggleSidebar->setToolTip("Приховати бічну панель");
+    btnToggleSidebar->setFocusPolicy(Qt::NoFocus);
+    btnToggleSidebar->setStyleSheet(
+        "QPushButton {"
+        "  background-color: #4b4b4b;"
+        "  border-radius: 4px;"
+        "  color: white;"
+        "  font-weight: bold;"
+        "  font-size: 11px;"
+        "  padding: 0px;"
+        "}"
+    );
+
+    mainLayout->addWidget(btnToggleSidebar);
 
     QTabWidget* tabWidget = new QTabWidget(this);
     
@@ -211,7 +234,7 @@ void MainWindow::setupUI() {
     QWidget* leftPanel = new QWidget(splitter);
     QVBoxLayout* leftLayout = new QVBoxLayout(leftPanel);
     leftLayout->setContentsMargins(0, 0, 0, 0);
-    QLabel* lblLeftHeader = new QLabel("ВХІДНЕ ЗОБРАЖЕННЯ (ОРИГІНАЛ)", leftPanel);
+    QLabel* lblLeftHeader = new QLabel("ВХІДНЕ ЗОБРАЖЕННЯ", leftPanel);
     lblLeftHeader->setStyleSheet("font-weight: bold; font-size: 11px;");
     viewerOrig = new ImageViewer("Завантажте фото", leftPanel);
     
@@ -221,7 +244,7 @@ void MainWindow::setupUI() {
     QWidget* rightPanel = new QWidget(splitter);
     QVBoxLayout* rightLayout = new QVBoxLayout(rightPanel);
     rightLayout->setContentsMargins(0, 0, 0, 0);
-    QLabel* lblRightHeader = new QLabel("ОБРОБЛЕНЕ ЗОБРАЖЕННЯ (БІЛІНІЙНЕ)", rightPanel);
+    QLabel* lblRightHeader = new QLabel("РЕЗУЛЬТАТ ОБРОБКИ", rightPanel);
     lblRightHeader->setStyleSheet("font-weight: bold; font-size: 11px;");
     viewerScaled = new ImageViewer("Масштабуйте зображення", rightPanel);
     
@@ -246,7 +269,7 @@ void MainWindow::setupUI() {
     btnWebcam->setCursor(Qt::PointingHandCursor);
     btnVideoRecord = new QPushButton("Запис у файл...", tabVideo);
     btnVideoRecord->setCursor(Qt::PointingHandCursor);
-    chkRealtimeMode = new QCheckBox("Режим реального часу (FPS джерела)", tabVideo);
+    chkRealtimeMode = new QCheckBox("Синхронізація з частотою джерела", tabVideo);
     chkRealtimeMode->setChecked(true);
 
     videoTopBar->addWidget(btnLoadVideo);
@@ -317,13 +340,13 @@ void MainWindow::setupUI() {
     QGridLayout* cardGrid = new QGridLayout();
     cardGrid->setSpacing(10);
     
-    QFrame* cardT1 = createTimeMetricCard("Час послідовної обробки (T1)", "мс", lblSingleTimeVal, lblSingleFps);
-    QFrame* cardTp = createTimeMetricCard("Час паралельної обробки (Tp)", "мс", lblMultiTimeVal, lblMultiFps);
-    QFrame* cardS = createMetricCard("Коефіцієнт прискорення (S)", "x", lblSpeedupVal);
-    QFrame* cardE = createMetricCard("Ефективність потоків (E)", "%", lblEfficiencyVal);
-    QFrame* cardMse = createMetricCard("Похибка (MSE)", "", lblMseVal);
-    QFrame* cardPsnr = createMetricCard("Якість обробки (PSNR)", "дБ", lblPsnrVal);
-    QFrame* cardSsim = createMetricCard("Метрика схожості (SSIM)", "", lblSsimVal);
+    QFrame* cardT1 = createTimeMetricCard("Час послідовної обробки", "мс", lblSingleTimeVal, lblSingleFps);
+    QFrame* cardTp = createTimeMetricCard("Час паралельної обробки", "мс", lblMultiTimeVal, lblMultiFps);
+    QFrame* cardS = createMetricCard("Коефіцієнт прискорення", "x", lblSpeedupVal);
+    QFrame* cardE = createMetricCard("Ефективність використання потоків", "%", lblEfficiencyVal);
+    QFrame* cardMse = createMetricCard("Середньоквадратична похибка MSE", "", lblMseVal);
+    QFrame* cardPsnr = createMetricCard("Пікове відношення сигналу до шуму PSNR", "дБ", lblPsnrVal);
+    QFrame* cardSsim = createMetricCard("Індекс структурної схожості SSIM", "", lblSsimVal);
     QFrame* cardMethod = createMetricCard("Активний алгоритм", "", lblActiveAlgorithmVal);
 
     cardGrid->addWidget(cardT1, 0, 0);
@@ -337,13 +360,13 @@ void MainWindow::setupUI() {
     
     perfLayout->addLayout(cardGrid);
 
-    QGroupBox* chartGroup = new QGroupBox("Діаграма порівняння часу виконання (менше = краще)", tabPerformance);
+    QGroupBox* chartGroup = new QGroupBox("Порівняння часу виконання", tabPerformance);
     QVBoxLayout* chartLayout = new QVBoxLayout(chartGroup);
     chartLayout->setContentsMargins(15, 15, 15, 15);
     chartLayout->setSpacing(10);
 
     QHBoxLayout* bar1Layout = new QHBoxLayout();
-    QLabel* lblBar1Title = new QLabel("Послідовний режим (1 потік):", chartGroup);
+    QLabel* lblBar1Title = new QLabel("Послідовний режим:", chartGroup);
     lblBar1Title->setFixedWidth(160);
     barSingleTime = new QProgressBar(chartGroup);
     barSingleTime->setTextVisible(true);
@@ -375,7 +398,7 @@ void MainWindow::setupUI() {
     benchLayout->setSpacing(15);
     
     QHBoxLayout* benchHeader = new QHBoxLayout();
-    QLabel* lblBenchDesc = new QLabel("Порівняння конфігурацій (блоки, потоки) з еталонним інструментом OpenCV:", tabBenchmark);
+    QLabel* lblBenchDesc = new QLabel("Порівняння конфігурацій блоків і потоків з еталоном OpenCV:", tabBenchmark);
     lblBenchDesc->setStyleSheet("font-weight: bold; font-size: 11px;");
     
     btnExportCsv = new QPushButton("Експорт у CSV", tabBenchmark);
@@ -404,7 +427,7 @@ void MainWindow::setupUI() {
     tableBenchmark->setColumnCount(8);
     tableBenchmark->setHorizontalHeaderLabels({
         "Метод масштабування", "Розмір блоку", "Потоки OpenMP", 
-        "Час обробки (мс)", "Швидкодія (FPS)", "Похибка (MSE)", "Якість PSNR (дБ)", "Подібність SSIM"
+        "Час обробки, мс", "Швидкодія, FPS", "Похибка MSE", "Якість PSNR, дБ", "Подібність SSIM"
     });
     tableBenchmark->setEditTriggers(QAbstractItemView::NoEditTriggers);
     tableBenchmark->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -413,7 +436,7 @@ void MainWindow::setupUI() {
     tableBenchmark->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     benchLayout->addWidget(tableBenchmark);
 
-    QLabel* lblTable2 = new QLabel("Матриця швидкодії паралельної обробки (Час виконання, мс):", tabBenchmark);
+    QLabel* lblTable2 = new QLabel("Матриця швидкодії паралельної обробки, мс:", tabBenchmark);
     lblTable2->setStyleSheet("font-weight: bold; font-size: 11px; margin-top: 10px;");
     benchLayout->addWidget(lblTable2);
 
@@ -428,8 +451,9 @@ void MainWindow::setupUI() {
 
     tabWidget->addTab(tabBenchmark, "Порівняльний Бенчмарк");
     
-    mainLayout->addWidget(tabWidget);
+    mainLayout->addWidget(tabWidget, 1);
 
+    connect(btnToggleSidebar, &QPushButton::clicked, this, &MainWindow::onToggleSidebarClicked);
     connect(btnLoad, &QPushButton::clicked, this, &MainWindow::onLoadImageClicked);
     connect(btnProcess, &QPushButton::clicked, this, &MainWindow::onProcessClicked);
     connect(btnSave, &QPushButton::clicked, this, &MainWindow::onSaveImageClicked);
@@ -472,6 +496,9 @@ void MainWindow::setupUI() {
         syncVideoProcessorParams();
     });
     connect(chkEnableOverlap, &QCheckBox::toggled, this, [this](bool) {
+        syncVideoProcessorParams();
+    });
+    connect(chkEnableSIMD, &QCheckBox::toggled, this, [this](bool) {
         syncVideoProcessorParams();
     });
 }
@@ -621,23 +648,28 @@ IScaler& MainWindow::getActiveScaler() {
     int index = comboAlgorithm->currentIndex();
     bool sharpen = chkEnableSharpen->isChecked();
     bool overlap = chkEnableOverlap->isChecked();
+    bool simd = chkEnableSIMD->isChecked();
 
     if (index == 1) {
         bicubicScaler.setEnableSharpen(sharpen);
         bicubicScaler.setEnableOverlap(overlap);
+        bicubicScaler.setEnableSIMD(simd);
         return bicubicScaler;
     } else if (index == 2) {
         lanczosScaler.setEnableSharpen(sharpen);
         lanczosScaler.setEnableOverlap(overlap);
+        lanczosScaler.setEnableSIMD(simd);
         return lanczosScaler;
     } else if (index == 3) {
         adaptiveScaler.setEnableSharpen(sharpen);
         adaptiveScaler.setEnableOverlap(overlap);
+        adaptiveScaler.setEnableSIMD(simd);
         return adaptiveScaler;
     }
 
     bilinearScaler.setEnableSharpen(sharpen);
     bilinearScaler.setEnableOverlap(overlap);
+    bilinearScaler.setEnableSIMD(simd);
     return bilinearScaler;
 }
 
@@ -646,10 +678,15 @@ IScaler& MainWindow::getActiveScaler() {
  */
 QString MainWindow::getActiveScalerName() const {
     int index = comboAlgorithm->currentIndex();
-    if (index == 1) return "Bicubic 4x4";
-    if (index == 2) return "Lanczos-3 6x6";
-    if (index == 3) return "Adaptive Sobel";
-    return "Bilinear";
+    QString name = "Bilinear";
+    if (index == 1) name = "Bicubic";
+    else if (index == 2) name = "Lanczos-3";
+    else if (index == 3) name = "Adaptive Sobel";
+
+    if (chkEnableSIMD->isChecked()) {
+        return name + " AVX2";
+    }
+    return name + " Scalar";
 }
 
 /**
@@ -687,7 +724,7 @@ void MainWindow::onProcessClicked() {
 
     if (outWidth <= 0 || outHeight <= 0 || outWidth > 16384 || outHeight > 16384) {
         QMessageBox::critical(this, "Помилка масштабування", 
-            "Отримані розміри вихідного зображення виходять за дозволені межі (до 16384 px)!");
+            "Отримані розміри вихідного зображення перевищують ліміт 16384 пікселів!");
         return;
     }
 
@@ -699,8 +736,8 @@ void MainWindow::onProcessClicked() {
     std::vector<cv::Rect> blocks = ParallelEngine::GenerateGrid(outWidth, outHeight, blockSize, blockSize);
 
     std::stringstream sLog;
-    sLog << "=== ПОЧАТОК МАСШТАБУВАННЯ (" << originalImage.cols << "x" << originalImage.rows 
-         << " -> " << outWidth << "x" << outHeight << ") [" << getActiveScalerName().toStdString() << "] ===";
+    sLog << "=== ПОЧАТОК МАСШТАБУВАННЯ: " << originalImage.cols << "x" << originalImage.rows 
+         << " -> " << outWidth << "x" << outHeight << " | " << getActiveScalerName().toStdString() << " ===";
     metricsController.AddLog(sLog.str());
     metricsController.AddLog("Розбиття вихідної матриці на сітку блоків...");
     
@@ -709,7 +746,7 @@ void MainWindow::onProcessClicked() {
     metricsController.AddLog(sGrid.str());
     updateLogsDisplay();
 
-    metricsController.AddLog("Запуск послідовної обробки (1 потік)...");
+    metricsController.AddLog("Запуск послідовної обробки в один потік...");
     updateLogsDisplay();
     QCoreApplication::processEvents();
 
@@ -793,7 +830,7 @@ void MainWindow::onProcessClicked() {
 
             int processedBlocks = startIdx + waveSize;
             int pct = static_cast<int>(processedBlocks * 100 / blocks.size());
-            viewerScaled->setStatusText(QString("%1x%2 Паралельна обробка (%3 потоків)... %4%")
+            viewerScaled->setStatusText(QString("%1x%2 Паралельна обробка, потоків %3... %4%")
                 .arg(outWidth).arg(outHeight).arg(threads).arg(pct));
 
             QCoreApplication::processEvents();
@@ -917,10 +954,10 @@ void MainWindow::updateMetricsDisplay(const ScalingMetrics& metrics) {
               << "Розмір зображення: " << metrics.imageWidth << " x " << metrics.imageHeight << " px\n"
               << "Розмір блоку обробки: " << metrics.blockSizeX << " x " << metrics.blockSizeY << " px\n"
               << "Задіяно ядер процесора: " << metrics.threadCount << "\n"
-              << "Послідовний режим (T1): " << std::fixed << std::setprecision(2) << metrics.singleThreadedTimeMs << " мс (" << singleFps << " FPS)\n"
-              << "Паралельний режим (Tp): " << metrics.multiThreadedTimeMs << " мс (" << multiFps << " FPS)\n"
-              << "Отримане прискорення (S): " << metrics.speedup << "x\n"
-              << "Ефективність використання ядер (E): " << metrics.efficiency << "%\n"
+              << "Послідовний режим T1: " << std::fixed << std::setprecision(2) << metrics.singleThreadedTimeMs << " мс, " << singleFps << " FPS\n"
+              << "Паралельний режим Tp: " << metrics.multiThreadedTimeMs << " мс, " << multiFps << " FPS\n"
+              << "Отримане прискорення S: " << metrics.speedup << "x\n"
+              << "Ефективність використання ядер E: " << metrics.efficiency << "%\n"
               << "Якість PSNR: " << metrics.psnr << " dB\n"
               << "Індекс SSIM: " << metrics.ssim << "\n"
               << "=================================";
@@ -1046,7 +1083,7 @@ void MainWindow::onRunBenchmarkClicked() {
 
     if (outWidth <= 0 || outHeight <= 0 || outWidth > 16384 || outHeight > 16384) {
         QMessageBox::critical(this, "Помилка масштабування", 
-            "Отримані розміри вихідного зображення виходять за дозволені межі (до 16384 px)!");
+            "Отримані розміри вихідного зображення перевищують ліміт 16384 пікселів!");
         return;
     }
 
@@ -1073,14 +1110,14 @@ void MainWindow::onRunBenchmarkClicked() {
     int rCv = tableBenchmark->rowCount();
     tableBenchmark->insertRow(rCv);
     
-    QTableWidgetItem* itemMethod = new QTableWidgetItem("OpenCV cv::resize (Еталон)");
-    QTableWidgetItem* itemBlock = new QTableWidgetItem("N/A (Суцільний)");
-    QTableWidgetItem* itemThreads = new QTableWidgetItem("Бібліотечні (Макс)");
+    QTableWidgetItem* itemMethod = new QTableWidgetItem("Еталон OpenCV resize");
+    QTableWidgetItem* itemBlock = new QTableWidgetItem("Суцільний кадр");
+    QTableWidgetItem* itemThreads = new QTableWidgetItem("Максимум потоків");
     QTableWidgetItem* itemTime = new QTableWidgetItem(QString::number(cvDuration, 'f', 1));
     QTableWidgetItem* itemFps = new QTableWidgetItem(QString::number(cvFps, 'f', 1));
-    QTableWidgetItem* itemMse = new QTableWidgetItem("0.0000 (Еталон)");
-    QTableWidgetItem* itemPsnr = new QTableWidgetItem("99.00 (Еталон)");
-    QTableWidgetItem* itemSsim = new QTableWidgetItem("1.0000 (Еталон)");
+    QTableWidgetItem* itemMse = new QTableWidgetItem("0.0000");
+    QTableWidgetItem* itemPsnr = new QTableWidgetItem("99.00");
+    QTableWidgetItem* itemSsim = new QTableWidgetItem("1.0000");
 
     tableBenchmark->setItem(rCv, 0, itemMethod);
     tableBenchmark->setItem(rCv, 1, itemBlock);
@@ -1099,7 +1136,7 @@ void MainWindow::onRunBenchmarkClicked() {
     tableBenchmark->item(rCv, 0)->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
 
     BenchmarkRecord cvRecord;
-    cvRecord.method = "OpenCV cv::resize (Еталон)";
+    cvRecord.method = "Еталон OpenCV resize";
     cvRecord.blockSize = "N/A";
     cvRecord.threads = omp_get_max_threads();
     cvRecord.durationMs = cvDuration;
@@ -1130,7 +1167,7 @@ void MainWindow::onRunBenchmarkClicked() {
     QStringList vertHeaders;
     for (int th : testThreads) {
         if (th == maxCores) {
-            vertHeaders << QString("%1 потоків (Макс)").arg(th);
+            vertHeaders << QString("%1 потоків, максимум").arg(th);
         } else if (th == 1) {
             vertHeaders << "1 потік";
         } else {
@@ -1438,4 +1475,22 @@ void MainWindow::onVideoStatusChanged(const QString& status) {
  */
 void MainWindow::onVideoErrorOccurred(const QString& error) {
     QMessageBox::critical(this, "Помилка відео", error);
+}
+
+/**
+ * @brief Перемикає видимість бічної панелі налаштувань та оновлює стрілку кнопки.
+ */
+void MainWindow::onToggleSidebarClicked() {
+    if (!sidebarFrame || !btnToggleSidebar) return;
+    
+    bool isVisible = sidebarFrame->isVisible();
+    sidebarFrame->setVisible(!isVisible);
+    
+    if (isVisible) {
+        btnToggleSidebar->setText("▶");
+        btnToggleSidebar->setToolTip("Показати бічну панель");
+    } else {
+        btnToggleSidebar->setText("◀");
+        btnToggleSidebar->setToolTip("Приховати бічну панель");
+    }
 }

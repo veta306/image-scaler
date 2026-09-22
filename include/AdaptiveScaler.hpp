@@ -12,6 +12,7 @@ class AdaptiveScaler : public IScaler {
 private:
     bool m_enableSharpen = false;
     bool m_enableOverlap = false;
+    bool m_enableSIMD = true;
     double m_gradientThreshold = 25.0;
 
     static inline double cubicWeight(double x) {
@@ -65,6 +66,11 @@ public:
     void setEnableOverlap(bool enable) { m_enableOverlap = enable; }
 
     /**
+     * @brief Вмикає або вимикає векторне прискорення SIMD AVX2.
+     */
+    void setEnableSIMD(bool enable) { m_enableSIMD = enable; }
+
+    /**
      * @brief Повертає стан прапорця підвищення різкості.
      */
     bool isSharpenEnabled() const { return m_enableSharpen; }
@@ -73,6 +79,11 @@ public:
      * @brief Повертає стан прапорця усунення межових швів.
      */
     bool isOverlapEnabled() const { return m_enableOverlap; }
+
+    /**
+     * @brief Повертає стан прапорця векторизації SIMD AVX2.
+     */
+    bool isSIMDEnabled() const { return m_enableSIMD; }
 };
 
 #endif // ADAPTIVE_SCALER_HPP

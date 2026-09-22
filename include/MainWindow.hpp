@@ -47,6 +47,7 @@ private slots:
     void onRunBenchmarkClicked();
     void onExportCsvClicked();
     void onExportJsonClicked();
+    void onToggleSidebarClicked();
 
     // Video slots
     void onLoadVideoClicked();
@@ -101,6 +102,7 @@ private:
     QCheckBox* chkEnableSharpen;
     QCheckBox* chkEnableOverlap;
     QCheckBox* chkEnableDemo;
+    QCheckBox* chkEnableSIMD;
     QComboBox* comboBlockSize;
     QSlider* sliderThreads;
     QSpinBox* spinThreads;
@@ -108,6 +110,8 @@ private:
     QPushButton* btnLoad;
     QPushButton* btnProcess;
     QPushButton* btnSave;
+    QFrame* sidebarFrame{nullptr};
+    QPushButton* btnToggleSidebar{nullptr};
 
     // Metrics Card Value labels
     QLabel* lblSingleTimeVal;

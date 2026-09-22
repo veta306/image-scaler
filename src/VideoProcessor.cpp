@@ -42,7 +42,7 @@ bool VideoProcessor::openVideo(const QString& filePath) {
     m_totalFrames = static_cast<int>(m_capture.get(cv::CAP_PROP_FRAME_COUNT));
 
     emit videoLoaded(m_sourceWidth, m_sourceHeight, m_sourceFps, m_totalFrames);
-    emit statusChanged(QString("Завантажено відео: %1x%2 @ %3 FPS (%4 кадрів)")
+    emit statusChanged(QString("Завантажено відео: %1x%2, %3 FPS, всього кадрів: %4")
         .arg(m_sourceWidth).arg(m_sourceHeight).arg(m_sourceFps, 0, 'f', 1).arg(m_totalFrames));
 
     return true;
@@ -114,7 +114,7 @@ void VideoProcessor::play() {
  */
 void VideoProcessor::pause() {
     m_paused = true;
-    emit statusChanged("Обробку призупинено (Пауза).");
+    emit statusChanged("Обробку призупинено.");
 }
 
 /**
