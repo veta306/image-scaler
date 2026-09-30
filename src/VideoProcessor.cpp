@@ -5,6 +5,8 @@
 #include <chrono>
 #include <cmath>
 #include <QFile>
+#include <QDir>
+#include <QProcess>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -346,7 +348,9 @@ void VideoProcessor::run() {
             GpuScaler::Algorithm algo = static_cast<GpuScaler::Algorithm>(m_algoIndex.load());
             GpuScaler::scaleFrame(frame, scaledFrame, outW, outH, algo, m_enableSharpen.load());
         } else if (scaler != nullptr) {
-            ParallelEngine::ScaleImage(frame, scaledFrame, blocks, *scaler, sX, sY, threads);
+            double actualScaleX = static_cast<double>(outW) / frame.cols;
+            double actualScaleY = static_cast<double>(outH) / frame.rows;
+            ParallelEngine::ScaleImage(frame, scaledFrame, blocks, *scaler, actualScaleX, actualScaleY, threads);
         } else {
             cv::resize(frame, scaledFrame, cv::Size(outW, outH));
         }
@@ -481,20 +485,30 @@ void VideoExporter::run() {
     if (outW % 2 != 0) outW++;
     if (outH % 2 != 0) outH++;
 
+    double actualScaleX = static_cast<double>(outW) / inW;
+    double actualScaleY = static_cast<double>(outH) / inH;
+
+    // Тимчасовий файл для запису масштабованого відео без звуку перед мультиплексуванням
+    QString ext = m_outputPath.endsWith(".avi", Qt::CaseInsensitive) ? ".avi" : ".mp4";
+    QString tempVideoPath = m_outputPath + ".tmp_video" + ext;
+    if (QFile::exists(tempVideoPath)) {
+        QFile::remove(tempVideoPath);
+    }
+
     int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
-    if (m_outputPath.endsWith(".avi", Qt::CaseInsensitive)) {
+    if (ext == ".avi") {
         fourcc = cv::VideoWriter::fourcc('M', 'J', 'P', 'G');
     }
 
     cv::VideoWriter writer;
-    bool opened = writer.open(m_outputPath.toStdString(), fourcc, inFps, cv::Size(outW, outH));
+    bool opened = writer.open(tempVideoPath.toStdString(), fourcc, inFps, cv::Size(outW, outH));
     if (!opened) {
         fourcc = cv::VideoWriter::fourcc('M', 'J', 'P', 'G');
-        opened = writer.open(m_outputPath.toStdString(), fourcc, inFps, cv::Size(outW, outH));
+        opened = writer.open(tempVideoPath.toStdString(), fourcc, inFps, cv::Size(outW, outH));
     }
 
     if (!opened) {
-        emit finishedError("Не вдалося створити вихідний файл відео. Перевірте шлях до файлу та права доступу:\n" + m_outputPath);
+        emit finishedError("Не вдалося створити тимчасовий файл відео. Перевірте шлях до файлу та права доступу:\n" + tempVideoPath);
         return;
     }
 
@@ -515,7 +529,7 @@ void VideoExporter::run() {
         if (m_useGpu && GpuScaler::isAvailable()) {
             GpuScaler::scaleFrame(frame, scaledFrame, outW, outH, gpuAlgo, m_enableSharpen);
         } else if (m_scaler != nullptr) {
-            ParallelEngine::ScaleImage(frame, scaledFrame, blocks, *m_scaler, m_scaleX, m_scaleY, m_threads);
+            ParallelEngine::ScaleImage(frame, scaledFrame, blocks, *m_scaler, actualScaleX, actualScaleY, m_threads);
         } else {
             cv::resize(frame, scaledFrame, cv::Size(outW, outH));
         }
@@ -538,12 +552,47 @@ void VideoExporter::run() {
     cap.release();
 
     if (m_cancelRequested) {
-        QFile::remove(m_outputPath);
+        if (QFile::exists(tempVideoPath)) {
+            QFile::remove(tempVideoPath);
+        }
         emit exportCanceled();
-    } else {
-        auto endTime = std::chrono::steady_clock::now();
-        double totalTimeSec = std::chrono::duration<double>(endTime - startTime).count();
-        double avgFps = (totalTimeSec > 0.0) ? (processedFrames / totalTimeSec) : 0.0;
-        emit finishedSuccess(processedFrames, totalTimeSec, avgFps, outW, outH);
+        return;
     }
+
+    // Мультиплексування звуку з вихідного відео за допомогою ffmpeg
+    bool muxSuccess = false;
+    {
+        QStringList args;
+        args << "-y"
+             << "-i" << QDir::toNativeSeparators(tempVideoPath)
+             << "-i" << QDir::toNativeSeparators(m_inputPath)
+             << "-c:v" << "copy"
+             << "-c:a" << "aac"
+             << "-map" << "0:v:0"
+             << "-map" << "1:a:0?"
+             << "-shortest"
+             << QDir::toNativeSeparators(m_outputPath);
+
+        QProcess ffmpegProc;
+        ffmpegProc.start("ffmpeg", args);
+        if (ffmpegProc.waitForFinished(60000) && ffmpegProc.exitStatus() == QProcess::NormalExit && ffmpegProc.exitCode() == 0) {
+            if (QFile::exists(m_outputPath)) {
+                muxSuccess = true;
+                QFile::remove(tempVideoPath);
+            }
+        }
+    }
+
+    // Якщо ffmpeg не спрацював або відсутній у системі, перейменовуємо тимчасовий файл на фінальний
+    if (!muxSuccess) {
+        if (QFile::exists(m_outputPath)) {
+            QFile::remove(m_outputPath);
+        }
+        QFile::rename(tempVideoPath, m_outputPath);
+    }
+
+    auto endTime = std::chrono::steady_clock::now();
+    double totalTimeSec = std::chrono::duration<double>(endTime - startTime).count();
+    double avgFps = (totalTimeSec > 0.0) ? (processedFrames / totalTimeSec) : 0.0;
+    emit finishedSuccess(processedFrames, totalTimeSec, avgFps, outW, outH);
 }

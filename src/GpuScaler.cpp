@@ -137,6 +137,7 @@ bool GpuScaler::scaleFrame(const cv::Mat& input, cv::Mat& output,
         output.create(targetHeight, targetWidth, input.type());
     }
     uOut.copyTo(output);
+    cv::ocl::finish();
     auto tDownloadEnd = std::chrono::high_resolution_clock::now();
 
     if (timingOut) {

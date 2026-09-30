@@ -231,18 +231,26 @@ void MainWindow::setupUI() {
     btnToggleSidebar->setFocusPolicy(Qt::NoFocus);
     btnToggleSidebar->setStyleSheet(
         "QPushButton {"
-        "  background-color: #4b4b4b;"
+        "  background-color: #f1f2f6;"
+        "  border: 1px solid #ced6e0;"
         "  border-radius: 4px;"
-        "  color: white;"
+        "  color: #2f3542;"
         "  font-weight: bold;"
         "  font-size: 11px;"
         "  padding: 0px;"
+        "}"
+        "QPushButton:hover {"
+        "  background-color: #dfe4ea;"
+        "  border-color: #a4b0be;"
+        "}"
+        "QPushButton:pressed {"
+        "  background-color: #ced6e0;"
         "}"
     );
 
     mainLayout->addWidget(btnToggleSidebar);
 
-    QTabWidget* tabWidget = new QTabWidget(this);
+    tabWidget = new QTabWidget(this);
     
     QWidget* tabCompare = new QWidget(tabWidget);
     QHBoxLayout* compareLayout = new QHBoxLayout(tabCompare);
@@ -276,6 +284,83 @@ void MainWindow::setupUI() {
     
     tabWidget->addTab(tabCompare, "Порівняння зображень");
 
+    // Вкладка детального аналізу текстур та теплових карт
+    QWidget* tabHeatmap = new QWidget(tabWidget);
+    QVBoxLayout* heatmapLayout = new QVBoxLayout(tabHeatmap);
+    heatmapLayout->setContentsMargins(15, 15, 15, 15);
+    heatmapLayout->setSpacing(12);
+
+    QHBoxLayout* heatControlsLayout = new QHBoxLayout();
+    heatControlsLayout->setSpacing(12);
+
+    QLabel* lblType = new QLabel("Тип аналізу:", tabHeatmap);
+    lblType->setStyleSheet("font-weight: bold; font-size: 11px;");
+    comboHeatmapType = new QComboBox(tabHeatmap);
+    comboHeatmapType->addItem("Градієнтна енергія (Собель)", 0);
+    comboHeatmapType->addItem("Локальна дисперсія (Текстура)", 1);
+    comboHeatmapType->addItem("Високочастотні контури (Лаплас)", 2);
+
+    QLabel* lblColormap = new QLabel("Колірна шкала:", tabHeatmap);
+    lblColormap->setStyleSheet("font-weight: bold; font-size: 11px;");
+    comboHeatmapColormap = new QComboBox(tabHeatmap);
+    comboHeatmapColormap->addItem("Google Turbo (Рекомендована)", 0);
+    comboHeatmapColormap->addItem("Спектральна Jet", 1);
+    comboHeatmapColormap->addItem("Inferno", 2);
+    comboHeatmapColormap->addItem("Теплова Hot", 3);
+    comboHeatmapColormap->addItem("Plasma", 4);
+
+    QLabel* lblAlpha = new QLabel("Прозорість накладання:", tabHeatmap);
+    lblAlpha->setStyleSheet("font-weight: bold; font-size: 11px;");
+    sliderHeatmapAlpha = new QSlider(Qt::Horizontal, tabHeatmap);
+    sliderHeatmapAlpha->setRange(0, 100);
+    sliderHeatmapAlpha->setValue(100);
+    sliderHeatmapAlpha->setFixedWidth(120);
+    lblHeatmapAlphaVal = new QLabel("100%", tabHeatmap);
+    lblHeatmapAlphaVal->setFixedWidth(38);
+    lblHeatmapAlphaVal->setStyleSheet("font-weight: bold;");
+
+    chkHeatmapUseScaled = new QCheckBox("Аналізувати масштабований результат", tabHeatmap);
+    chkHeatmapUseScaled->setChecked(false);
+
+    btnSaveHeatmap = new QPushButton("Зберегти карту...", tabHeatmap);
+    btnSaveHeatmap->setCursor(Qt::PointingHandCursor);
+    btnSaveHeatmap->setEnabled(false);
+
+    btnRefreshHeatmap = new QPushButton("Оновити", tabHeatmap);
+    btnRefreshHeatmap->setCursor(Qt::PointingHandCursor);
+
+    heatControlsLayout->addWidget(lblType);
+    heatControlsLayout->addWidget(comboHeatmapType);
+    heatControlsLayout->addWidget(lblColormap);
+    heatControlsLayout->addWidget(comboHeatmapColormap);
+    heatControlsLayout->addWidget(lblAlpha);
+    heatControlsLayout->addWidget(sliderHeatmapAlpha);
+    heatControlsLayout->addWidget(lblHeatmapAlphaVal);
+    heatControlsLayout->addWidget(chkHeatmapUseScaled);
+    heatControlsLayout->addStretch();
+    heatControlsLayout->addWidget(btnSaveHeatmap);
+    heatControlsLayout->addWidget(btnRefreshHeatmap);
+
+    heatmapLayout->addLayout(heatControlsLayout);
+
+    QGridLayout* heatGrid = new QGridLayout();
+    heatGrid->setSpacing(10);
+    QFrame* cardSmooth = createMetricCard("Гладкі однорідні ділянки", "%", lblHeatmapSmoothVal);
+    QFrame* cardTextured = createMetricCard("Помірно текстуровані зони", "%", lblHeatmapTexturedVal);
+    QFrame* cardEdge = createMetricCard("Різкі контури та межі", "%", lblHeatmapEdgeVal);
+    QFrame* cardEnergy = createMetricCard("Середня енергія частот", "", lblHeatmapEnergyVal);
+
+    heatGrid->addWidget(cardSmooth, 0, 0);
+    heatGrid->addWidget(cardTextured, 0, 1);
+    heatGrid->addWidget(cardEdge, 0, 2);
+    heatGrid->addWidget(cardEnergy, 0, 3);
+    heatmapLayout->addLayout(heatGrid);
+
+    viewerHeatmap = new ImageViewer("Завантажте фото для побудови та аналізу карти текстур", tabHeatmap);
+    heatmapLayout->addWidget(viewerHeatmap, 1);
+
+    tabWidget->addTab(tabHeatmap, "Аналіз текстур (Heatmap)");
+
     QWidget* tabVideo = new QWidget(tabWidget);
     QVBoxLayout* videoTabLayout = new QVBoxLayout(tabVideo);
     videoTabLayout->setContentsMargins(15, 15, 15, 15);
@@ -304,7 +389,16 @@ void MainWindow::setupUI() {
 
     lblVideoDisplay = new QLabel(tabVideo);
     lblVideoDisplay->setAlignment(Qt::AlignCenter);
-    lblVideoDisplay->setStyleSheet("background-color: #1e272e; color: #808e9b; font-size: 15px; border: 1px solid #485460; border-radius: 8px; min-height: 380px;");
+    lblVideoDisplay->setStyleSheet(
+        "QLabel {"
+        "  background-color: #f8f9fa;"
+        "  color: #57606f;"
+        "  font-size: 15px;"
+        "  border: 1px solid #ced6e0;"
+        "  border-radius: 8px;"
+        "  min-height: 380px;"
+        "}"
+    );
     lblVideoDisplay->setText("Відеопотік не завантажено.\nОберіть відеофайл або запустіть веб-камеру.");
     lblVideoDisplay->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     videoTabLayout->addWidget(lblVideoDisplay, 1);
@@ -415,6 +509,10 @@ void MainWindow::setupUI() {
     
     tabWidget->addTab(tabPerformance, "Аналіз швидкодії та Метрики");
 
+    analyticsWidget = new ScalingAnalyticsWidget(tabWidget);
+    tabWidget->addTab(analyticsWidget, "Аналітика та графіки масштабування");
+    connect(analyticsWidget, &ScalingAnalyticsWidget::requestRunFullBenchmark, this, &MainWindow::onRunBenchmarkClicked);
+
     QWidget* tabBenchmark = new QWidget(tabWidget);
     QVBoxLayout* benchLayout = new QVBoxLayout(tabBenchmark);
     benchLayout->setContentsMargins(15, 15, 15, 15);
@@ -504,9 +602,11 @@ void MainWindow::setupUI() {
             spinCustomScale->setValue(val);
         }
         updateTargetResolutionFromScale();
+        updateVideoInfoLabel();
     });
     connect(spinCustomScale, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
         updateTargetResolutionFromScale();
+        updateVideoInfoLabel();
     });
     connect(spinTargetWidth, qOverload<int>(&QSpinBox::valueChanged), this, &MainWindow::onTargetWidthChanged);
     connect(spinTargetHeight, qOverload<int>(&QSpinBox::valueChanged), this, &MainWindow::onTargetHeightChanged);
@@ -534,6 +634,25 @@ void MainWindow::setupUI() {
         }
         updateLogsDisplay();
     });
+
+    connect(comboHeatmapType, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+        updateHeatmapDisplay();
+    });
+    connect(comboHeatmapColormap, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+        updateHeatmapDisplay();
+    });
+    connect(sliderHeatmapAlpha, &QSlider::valueChanged, this, [this](int val) {
+        lblHeatmapAlphaVal->setText(QString("%1%").arg(val));
+        updateHeatmapDisplay();
+    });
+    connect(chkHeatmapUseScaled, &QCheckBox::toggled, this, [this](bool) {
+        updateHeatmapDisplay();
+    });
+    connect(btnSaveHeatmap, &QPushButton::clicked, this, &MainWindow::onSaveHeatmapClicked);
+    connect(btnRefreshHeatmap, &QPushButton::clicked, this, &MainWindow::updateHeatmapDisplay);
+
+    updateVideoInfoLabel();
+    updateHeatmapDisplay();
 }
 
 /**
@@ -672,6 +791,11 @@ void MainWindow::onLoadImageClicked() {
        << " [" << originalImage.cols << "x" << originalImage.rows << ", " << originalImage.channels() << " канали].";
     metricsController.AddLog(ss.str());
     updateLogsDisplay();
+
+    updateHeatmapDisplay();
+    if (analyticsWidget) {
+        analyticsWidget->setSourceImage(originalImage, currentScale);
+    }
 }
 
 /**
@@ -949,6 +1073,11 @@ void MainWindow::onProcessClicked() {
     updateMetricsDisplay(metrics);
     btnSave->setEnabled(true);
 
+    updateHeatmapDisplay();
+    if (analyticsWidget) {
+        analyticsWidget->setSourceImage(originalImage, scaleX);
+    }
+
     QGuiApplication::restoreOverrideCursor();
     
     QMessageBox::information(this, "Успіх", "Масштабування виконано! Перевірте вкладку 'Аналіз швидкодії' для детальних метрик.");
@@ -1092,67 +1221,238 @@ void MainWindow::onScalingModeChanged(int index) {
     spinTargetHeight->setEnabled(!factorMode);
     chkKeepAspectRatio->setEnabled(!factorMode);
     
-    if (!factorMode && !originalImage.empty()) {
+    int srcW = 0, srcH = 0;
+    if (!originalImage.empty()) {
+        srcW = originalImage.cols;
+        srcH = originalImage.rows;
+    } else if (videoProcessor && videoProcessor->isOpen()) {
+        srcW = videoProcessor->sourceWidth();
+        srcH = videoProcessor->sourceHeight();
+    }
+
+    if (!factorMode && srcW > 0 && srcH > 0) {
         double currentScale = spinCustomScale->value();
         spinTargetWidth->blockSignals(true);
         spinTargetHeight->blockSignals(true);
-        spinTargetWidth->setValue(static_cast<int>(std::round(originalImage.cols * currentScale)));
-        spinTargetHeight->setValue(static_cast<int>(std::round(originalImage.rows * currentScale)));
+        spinTargetWidth->setValue(static_cast<int>(std::round(srcW * currentScale)));
+        spinTargetHeight->setValue(static_cast<int>(std::round(srcH * currentScale)));
         spinTargetWidth->blockSignals(false);
         spinTargetHeight->blockSignals(false);
     }
+    updateVideoInfoLabel();
 }
 
 /**
  * @brief Оновлює висоту при ручній зміні цільової ширини для збереження пропорцій.
  */
 void MainWindow::onTargetWidthChanged(int value) {
-    if (originalImage.empty() || !chkKeepAspectRatio->isChecked()) {
-        return;
+    int srcW = 0, srcH = 0;
+    if (!originalImage.empty()) {
+        srcW = originalImage.cols;
+        srcH = originalImage.rows;
+    } else if (videoProcessor && videoProcessor->isOpen()) {
+        srcW = videoProcessor->sourceWidth();
+        srcH = videoProcessor->sourceHeight();
     }
-    
-    double aspect = static_cast<double>(originalImage.rows) / originalImage.cols;
-    int newHeight = static_cast<int>(std::round(value * aspect));
-    
-    spinTargetHeight->blockSignals(true);
-    spinTargetHeight->setValue(newHeight);
-    spinTargetHeight->blockSignals(false);
+
+    if (chkKeepAspectRatio->isChecked() && srcW > 0 && srcH > 0) {
+        double aspect = static_cast<double>(srcH) / srcW;
+        int newHeight = static_cast<int>(std::round(value * aspect));
+        
+        spinTargetHeight->blockSignals(true);
+        spinTargetHeight->setValue(newHeight);
+        spinTargetHeight->blockSignals(false);
+    }
+    updateVideoInfoLabel();
 }
 
 /**
  * @brief Оновлює ширину при ручній зміні цільової висоти для збереження пропорцій.
  */
 void MainWindow::onTargetHeightChanged(int value) {
-    if (originalImage.empty() || !chkKeepAspectRatio->isChecked()) {
-        return;
+    int srcW = 0, srcH = 0;
+    if (!originalImage.empty()) {
+        srcW = originalImage.cols;
+        srcH = originalImage.rows;
+    } else if (videoProcessor && videoProcessor->isOpen()) {
+        srcW = videoProcessor->sourceWidth();
+        srcH = videoProcessor->sourceHeight();
     }
-    
-    double aspect = static_cast<double>(originalImage.cols) / originalImage.rows;
-    int newWidth = static_cast<int>(std::round(value * aspect));
-    
-    spinTargetWidth->blockSignals(true);
-    spinTargetWidth->setValue(newWidth);
-    spinTargetWidth->blockSignals(false);
+
+    if (chkKeepAspectRatio->isChecked() && srcW > 0 && srcH > 0) {
+        double aspect = static_cast<double>(srcW) / srcH;
+        int newWidth = static_cast<int>(std::round(value * aspect));
+        
+        spinTargetWidth->blockSignals(true);
+        spinTargetWidth->setValue(newWidth);
+        spinTargetWidth->blockSignals(false);
+    }
+    updateVideoInfoLabel();
 }
 
 /**
  * @brief Оновлює поля цільової роздільної здатності на основі поточного масштабу.
  */
 void MainWindow::updateTargetResolutionFromScale() {
-    if (originalImage.empty()) {
+    int srcW = 0, srcH = 0;
+    if (!originalImage.empty()) {
+        srcW = originalImage.cols;
+        srcH = originalImage.rows;
+    } else if (videoProcessor && videoProcessor->isOpen()) {
+        srcW = videoProcessor->sourceWidth();
+        srcH = videoProcessor->sourceHeight();
+    }
+
+    if (srcW > 0 && srcH > 0) {
+        double currentScale = spinCustomScale->value();
+        int newWidth = static_cast<int>(std::round(srcW * currentScale));
+        int newHeight = static_cast<int>(std::round(srcH * currentScale));
+        
+        spinTargetWidth->blockSignals(true);
+        spinTargetHeight->blockSignals(true);
+        spinTargetWidth->setValue(newWidth);
+        spinTargetHeight->setValue(newHeight);
+        spinTargetWidth->blockSignals(false);
+        spinTargetHeight->blockSignals(false);
+    }
+    updateVideoInfoLabel();
+}
+
+/**
+ * @brief Оновлює рядок інформації про відеопотік із зазначенням роздільності джерела та обраної цільової роздільності.
+ */
+void MainWindow::updateVideoInfoLabel() {
+    if (!lblVideoInfo) return;
+
+    int srcW = 0, srcH = 0;
+    double fps = 0.0;
+    int totalFrames = 0;
+    bool hasVideo = false;
+
+    if (videoProcessor && videoProcessor->isOpen()) {
+        srcW = videoProcessor->sourceWidth();
+        srcH = videoProcessor->sourceHeight();
+        fps = videoProcessor->sourceFps();
+        totalFrames = videoProcessor->totalFrames();
+        hasVideo = true;
+    }
+
+    int targetW = 0;
+    int targetH = 0;
+    if (comboScalingMode->currentIndex() == 0) {
+        double s = spinCustomScale->value();
+        if (hasVideo && srcW > 0 && srcH > 0) {
+            targetW = static_cast<int>(std::round(srcW * s));
+            targetH = static_cast<int>(std::round(srcH * s));
+            if (targetW % 2 != 0) targetW++;
+            if (targetH % 2 != 0) targetH++;
+        }
+    } else {
+        targetW = spinTargetWidth->value();
+        targetH = spinTargetHeight->value();
+        if (targetW % 2 != 0) targetW++;
+        if (targetH % 2 != 0) targetH++;
+    }
+
+    QString sourceStr;
+    if (hasVideo) {
+        if (videoProcessor->isCamera()) {
+            sourceStr = QString("Джерело: Веб-камера (%1x%2)").arg(srcW).arg(srcH);
+        } else {
+            sourceStr = QString("Джерело: %1x%2 @ %3 FPS [%4 кадрів]")
+                .arg(srcW).arg(srcH).arg(fps, 0, 'f', 1).arg(totalFrames);
+        }
+    } else {
+        sourceStr = "Джерело: Немає даних";
+    }
+
+    QString targetStr;
+    if (targetW > 0 && targetH > 0) {
+        targetStr = QString("Цільова роздільність: %1x%2 px").arg(targetW).arg(targetH);
+    } else if (comboScalingMode->currentIndex() == 0) {
+        targetStr = QString("Ціль: Масштаб %1x").arg(spinCustomScale->value(), 0, 'f', 2);
+    } else {
+        targetStr = "Цільова роздільність: Не вказано";
+    }
+
+    lblVideoInfo->setText(QString("%1 | %2").arg(sourceStr, targetStr));
+}
+
+/**
+ * @brief Розраховує та візуалізує карту текстур / тепла у виділеній вкладці, оновлюючи метрики складності.
+ */
+void MainWindow::updateHeatmapDisplay() {
+    cv::Mat targetMat;
+    if (chkHeatmapUseScaled && chkHeatmapUseScaled->isChecked() && !scaledImage.empty()) {
+        targetMat = scaledImage;
+    } else if (!originalImage.empty()) {
+        targetMat = originalImage;
+    }
+
+    if (targetMat.empty()) {
+        if (viewerHeatmap) {
+            viewerHeatmap->clear();
+            viewerHeatmap->setStatusText("Немає вхідного зображення для аналізу");
+        }
+        if (lblHeatmapSmoothVal) lblHeatmapSmoothVal->setText("0.00");
+        if (lblHeatmapTexturedVal) lblHeatmapTexturedVal->setText("0.00");
+        if (lblHeatmapEdgeVal) lblHeatmapEdgeVal->setText("0.00");
+        if (lblHeatmapEnergyVal) lblHeatmapEnergyVal->setText("0.00");
+        if (btnSaveHeatmap) btnSaveHeatmap->setEnabled(false);
         return;
     }
-    
-    double currentScale = spinCustomScale->value();
-    int newWidth = static_cast<int>(std::round(originalImage.cols * currentScale));
-    int newHeight = static_cast<int>(std::round(originalImage.rows * currentScale));
-    
-    spinTargetWidth->blockSignals(true);
-    spinTargetHeight->blockSignals(true);
-    spinTargetWidth->setValue(newWidth);
-    spinTargetHeight->setValue(newHeight);
-    spinTargetWidth->blockSignals(false);
-    spinTargetHeight->blockSignals(false);
+
+    TextureAnalyzer::MapType mapType = comboHeatmapType ? 
+        static_cast<TextureAnalyzer::MapType>(comboHeatmapType->currentIndex()) : 
+        TextureAnalyzer::MapType::SobelGradient;
+
+    TextureAnalyzer::ColorMap colorMap = comboHeatmapColormap ? 
+        static_cast<TextureAnalyzer::ColorMap>(comboHeatmapColormap->currentIndex()) : 
+        TextureAnalyzer::ColorMap::Turbo;
+
+    double alpha = sliderHeatmapAlpha ? (sliderHeatmapAlpha->value() / 100.0) : 1.0;
+
+    TextureAnalyzer::TextureStats stats;
+    currentHeatmapMat = TextureAnalyzer::computeHeatmap(targetMat, mapType, colorMap, alpha, &stats);
+
+    if (viewerHeatmap && !currentHeatmapMat.empty()) {
+        viewerHeatmap->setImage(currentHeatmapMat);
+        viewerHeatmap->setStatusText(QString("Розмір: %1x%2 px | Прозорість: %3%")
+            .arg(currentHeatmapMat.cols).arg(currentHeatmapMat.rows).arg(static_cast<int>(alpha * 100)));
+    }
+
+    if (lblHeatmapSmoothVal) lblHeatmapSmoothVal->setText(QString::number(stats.smoothPercent, 'f', 1));
+    if (lblHeatmapTexturedVal) lblHeatmapTexturedVal->setText(QString::number(stats.texturedPercent, 'f', 1));
+    if (lblHeatmapEdgeVal) lblHeatmapEdgeVal->setText(QString::number(stats.edgePercent, 'f', 1));
+    if (lblHeatmapEnergyVal) lblHeatmapEnergyVal->setText(QString::number(stats.meanEnergy, 'f', 1));
+
+    if (btnSaveHeatmap) btnSaveHeatmap->setEnabled(!currentHeatmapMat.empty());
+}
+
+/**
+ * @brief Зберігає згенеровану карту текстур (теплову карту) у файл зображення.
+ */
+void MainWindow::onSaveHeatmapClicked() {
+    if (currentHeatmapMat.empty()) {
+        QMessageBox::warning(this, "Попередження", "Немає згенерованої карти текстур для збереження!");
+        return;
+    }
+
+    QString defaultName = "texture_heatmap.png";
+    if (!currentFilePath.isEmpty()) {
+        QFileInfo fi(currentFilePath);
+        defaultName = fi.path() + "/" + fi.baseName() + "_heatmap.png";
+    }
+
+    QString savePath = QFileDialog::getSaveFileName(this, 
+        "Зберегти карту текстур", defaultName, "Зображення (*.png *.jpg *.bmp)");
+    if (savePath.isEmpty()) return;
+
+    if (IO_Manager::SaveImage(savePath.toStdString(), currentHeatmapMat)) {
+        QMessageBox::information(this, "Збережено", "Карту текстур успішно збережено у файл:\n" + QDir::toNativeSeparators(savePath));
+    } else {
+        QMessageBox::critical(this, "Помилка", "Не вдалося зберегти файл карти текстур:\n" + savePath);
+    }
 }
 
 /**
@@ -1363,8 +1663,12 @@ void MainWindow::onRunBenchmarkClicked() {
     btnExportCsv->setEnabled(!currentBenchmarkRecords.empty());
     btnExportJson->setEnabled(!currentBenchmarkRecords.empty());
 
+    if (analyticsWidget) {
+        analyticsWidget->updateFromBenchmarkRecords(currentBenchmarkRecords);
+    }
+
     QMessageBox::information(this, "Тестування завершено", 
-        "Автоматичний порівняльний бенчмарк успішно виконано!");
+        "Автоматичний порівняльний бенчмарк успішно виконано!\nГрафіки та закон Амдала автоматично оновлено у вкладці 'Аналітика та графіки масштабування'.");
 }
 
 /**
@@ -1466,6 +1770,7 @@ void MainWindow::onWebcamClicked() {
         btnExportVideo->setEnabled(false);
         sliderVideoProgress->setEnabled(false);
         lblVideoDisplay->setText("Веб-камеру підключено.\nНатисніть 'Відтворити' для запуску трансляції.");
+        updateVideoInfoLabel();
     }
 }
 
@@ -1663,8 +1968,10 @@ void MainWindow::onVideoSeekSliderMoved(int position) {
  * @brief Оновлює інформацію про завантажене відео при отриманні метаданих.
  */
 void MainWindow::onVideoLoaded(int width, int height, double fps, int totalFrames) {
-    lblVideoInfo->setText(QString("Джерело: %1x%2 @ %3 FPS [%4 кадрів]")
-        .arg(width).arg(height).arg(fps, 0, 'f', 1).arg(totalFrames));
+    Q_UNUSED(width);
+    Q_UNUSED(height);
+    Q_UNUSED(fps);
+    updateVideoInfoLabel();
     sliderVideoProgress->setRange(0, totalFrames);
     sliderVideoProgress->setValue(0);
     lblVideoTime->setText(QString("0 / %1").arg(totalFrames));

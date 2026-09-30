@@ -15,7 +15,7 @@ if(WIN32)
 endif()
 
 # Пошук пакетів
-find_package(Qt6 COMPONENTS Widgets Core Gui REQUIRED)
+find_package(Qt6 COMPONENTS Widgets Core Gui Charts REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(OpenMP REQUIRED)
 
@@ -54,6 +54,7 @@ target_link_libraries(ParallelImageScaler PRIVATE
     Qt6::Widgets
     Qt6::Core
     Qt6::Gui
+    Qt6::Charts
     ${OpenCV_LIBS}
     OpenMP::OpenMP_CXX
 )

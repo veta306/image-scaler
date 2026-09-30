@@ -57,7 +57,7 @@ void LanczosScaler::ScaleBlock(const cv::Mat& input, cv::Mat& output, const cv::
     const int inRows = input.rows;
     const int channels = input.channels();
 
-    const int pad = m_enableOverlap ? 3 : 0;
+    const int pad = m_enableOverlap ? 3 : (m_enableSharpen ? 1 : 0);
 
     const int x_start = std::max(0, blockRect.x - pad);
     const int y_start = std::max(0, blockRect.y - pad);

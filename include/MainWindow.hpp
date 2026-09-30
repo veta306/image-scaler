@@ -28,6 +28,8 @@
 #include "IO_Manager.hpp"
 #include "Parallel_Engine.hpp"
 #include "ImageViewer.hpp"
+#include "TextureAnalyzer.hpp"
+#include "ScalingAnalyticsWidget.hpp"
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -65,6 +67,10 @@ private slots:
     void onVideoStatusChanged(const QString& status);
     void onVideoErrorOccurred(const QString& error);
 
+    // Heatmap slots
+    void updateHeatmapDisplay();
+    void onSaveHeatmapClicked();
+
 private:
     void setupUI();
     void applyStyleSheet();
@@ -76,6 +82,7 @@ private:
     IScaler& getActiveScaler();
     QString getActiveScalerName() const;
     void syncVideoProcessorParams();
+    void updateVideoInfoLabel();
 
     cv::Mat originalImage;
     cv::Mat scaledImage;
@@ -159,6 +166,27 @@ private:
     QString currentVideoPath;
     QString outputRecordPath;
     bool isRecordingVideo{false};
+
+    // Heatmap tab widgets
+    QTabWidget* tabWidget{nullptr};
+
+    QComboBox* comboHeatmapType{nullptr};
+    QComboBox* comboHeatmapColormap{nullptr};
+    QSlider* sliderHeatmapAlpha{nullptr};
+    QLabel* lblHeatmapAlphaVal{nullptr};
+    QCheckBox* chkHeatmapUseScaled{nullptr};
+    QPushButton* btnSaveHeatmap{nullptr};
+    QPushButton* btnRefreshHeatmap{nullptr};
+
+    QLabel* lblHeatmapSmoothVal{nullptr};
+    QLabel* lblHeatmapTexturedVal{nullptr};
+    QLabel* lblHeatmapEdgeVal{nullptr};
+    QLabel* lblHeatmapEnergyVal{nullptr};
+
+    ImageViewer* viewerHeatmap{nullptr};
+    cv::Mat currentHeatmapMat;
+
+    ScalingAnalyticsWidget* analyticsWidget{nullptr};
 };
 
 #endif // MAINWINDOW_HPP
